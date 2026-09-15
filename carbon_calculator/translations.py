@@ -9,6 +9,12 @@
   탄소저장량 carbon storage · 교목 tree · 관목 shrub · 수종 species
   상대생장식 allometric equation · 탄소전환계수 carbon fraction (CF)
   지역 site · 대상지 유형 site category · 기여도 contribution
+
+아래 `EN` 은 프로그램에 내장된 기본값이다. 이 파일을 수정하면 반드시
+재빌드해야 exe 에 반영되지만, 프로젝트 루트(또는 exe 옆)의
+`translations_ko_en.json` 은 프로그램 시작 시 읽혀 이 기본값을
+**재빌드 없이** 덮어쓴다 — 번역 문구를 다듬을 때는 그 JSON 파일을
+수정하는 편이 훨씬 빠르다 (`_load_json_overrides()` 참고).
 """
 from __future__ import annotations
 
@@ -79,10 +85,9 @@ EN: dict[str, str] = {
         "In English mode, species are labelled with their scientific names, and the "
         "interface, figures, and Excel output are all produced in English.",
     "언어 변경": "Change language",
-    "언어를 바꾸려면 프로그램을 다시 시작해야 합니다.\n지금 다시 시작할까요?":
-        "The application must restart to change the display language.\nRestart now?",
-    "입력한 지역과 계산 결과는 저장되지 않습니다.":
-        "Any sites you have entered and their results will not be preserved.",
+    "언어를 변경하면 입력한 지역과 계산 결과가 모두 사라집니다.\n계속할까요?":
+        "Changing the language will clear any sites you have entered and their "
+        "results.\nContinue?",
 
     # ══════════════════ 지역 추가/삭제 대화상자 ══════════════════
     "지역 추가": "Add site",
@@ -452,3 +457,51 @@ EN: dict[str, str] = {
         "The illustration and all 'rendered' values are for 3D visualization only and "
         "do not affect the carbon calculation.",
 }
+
+
+def _load_json_overrides() -> None:
+    """`translations_ko_en.json` 으로 `EN` 의 항목을 덮어쓴다 (재빌드 불필요).
+
+    탐색 우선순위 (먼저 찾은 파일을 사용) — `data.py._load_from_bundled_json()`
+    과 동일한 규칙:
+      exe 실행 시 — ① exe 옆 디렉터리 (사용자가 번역을 수정해 배포) → ② sys._MEIPASS (번들 기본값)
+      개발 모드   — ③ 프로젝트 루트
+
+    JSON 은 `{"UI": {"<한글 원문>": "<영문>", ...}}` 형식이며, 여기 있는 키만
+    기존 `EN` 값을 덮어쓴다(전체 재작성이 아니라 병합). 파일이 없거나 형식이
+    어긋나면 조용히 무시하고 내장 기본값을 그대로 사용한다.
+    """
+    import json as _json
+    import pathlib as _pl
+    import sys as _sys
+
+    _meipass = getattr(_sys, "_MEIPASS", None)
+    if _meipass:
+        _candidates = [_pl.Path(_sys.executable).parent, _pl.Path(_meipass)]
+    else:
+        _candidates = [_pl.Path(__file__).resolve().parent.parent]
+
+    _json_path = next(
+        (_b / "translations_ko_en.json" for _b in _candidates
+         if (_b / "translations_ko_en.json").exists()),
+        None,
+    )
+    if _json_path is None:
+        return
+
+    try:
+        _raw = _json.loads(_json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    _overrides = _raw.get("UI") if isinstance(_raw, dict) else None
+    if not isinstance(_overrides, dict):
+        return
+
+    EN.update({
+        _k: _v for _k, _v in _overrides.items()
+        if isinstance(_k, str) and isinstance(_v, str)
+    })
+
+
+_load_json_overrides()

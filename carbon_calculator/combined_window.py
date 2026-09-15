@@ -11,9 +11,6 @@
 """
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from typing import List, Optional
 
 from PyQt5.QtCore import Qt
@@ -22,14 +19,14 @@ from PyQt5.QtWidgets import (
     QAction, QActionGroup, QApplication, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSpinBox,
-    QStatusBar, QTabBar, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+    QTabBar, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
     QWidget,
 )
 
 from .calculations import calculate_site_carbon_metrics
 from .data import RESTORATION_ENVIRONMENTS
 from .i18n import (
-    LANG_EN, LANG_KO, environment_name, get_language, save_language, tr,
+    LANG_EN, LANG_KO, environment_name, get_language, save_language, set_language, tr,
 )
 from .excel_export import export_all_regions_to_excel
 from .main_window import MainWindow as Carbon1Window
@@ -336,10 +333,6 @@ class CombinedMainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(
-            tr("FORECAST-SW - 산림복원지 탄소추정 및 시나리오 분석 소프트웨어 (Ver. {version})")
-            .format(version=__version__)
-        )
         apply_window_size(self, wfrac=0.84, hfrac=0.88, min_w=1100, min_h=680)
 
         # 지역 목록: 각 항목 {name, w, h, env, window(Carbon1Window), container}
@@ -348,6 +341,24 @@ class CombinedMainWindow(QMainWindow):
 
         # 국내·국외 통합(Carbon2)은 화면에 노출하지 않되 코드/수식 재사용을 위해 인스턴스 보존.
         self._carbon2 = Carbon2MainWindow()
+
+        self._build_ui()
+
+    # ----- UI 구성 (최초 생성과 언어 변경 시 재구성에 공용으로 쓰인다) -----
+
+    def _build_ui(self) -> None:
+        """창 제목·탭 영역·메뉴·상태바를 현재 언어로 (다시) 구성한다.
+
+        기존 중앙 위젯이 있으면(=언어 변경으로 인한 재구성) 안전하게 떼어내
+        (``takeCentralWidget``) 새 위젯으로 교체한 뒤 지연 삭제한다. 메뉴바는
+        Qt가 재사용하는 기존 객체이므로 다시 채우기 전에 비운다.
+        """
+        self.setWindowTitle(
+            tr("FORECAST-SW - 산림복원지 탄소추정 및 시나리오 분석 소프트웨어 (Ver. {version})")
+            .format(version=__version__)
+        )
+
+        old_central = self.takeCentralWidget()
 
         tabs = QTabWidget()
         tabs.setTabPosition(QTabWidget.North)
@@ -389,6 +400,10 @@ class CombinedMainWindow(QMainWindow):
         self.setCentralWidget(tabs)
         self._set_placeholder(True)
 
+        if old_central is not None:
+            old_central.deleteLater()
+
+        self.menuBar().clear()
         self._build_menu()
         self._build_statusbar()
 
@@ -453,11 +468,29 @@ class CombinedMainWindow(QMainWindow):
             return
         self._tabs.removeTab(index)
         self._regions.remove(region)
+        self._dispose_region(region)
+        if not self._regions:
+            self._set_placeholder(True)
+
+    @staticmethod
+    def _dispose_region(region: dict) -> None:
+        """지역 하나의 창·컨테이너를 닫고 지연 삭제한다."""
         region["window"].close()
         region["window"].deleteLater()
         region["container"].deleteLater()
-        if not self._regions:
-            self._set_placeholder(True)
+
+    def _teardown_regions(self) -> None:
+        """모든 지역 인스턴스를 정리한다 (언어 변경으로 전체 재구성할 때 사용).
+
+        탭에서 각각 제거할 필요는 없다 — 이 지역들을 담고 있던 탭 위젯
+        자체가 ``_build_ui`` 에서 곧 통째로 교체·지연 삭제되기 때문이다.
+        """
+        for region in self._regions:
+            self._dispose_region(region)
+        self._regions = []
+        if self._placeholder is not None:
+            self._placeholder.deleteLater()
+            self._placeholder = None
 
     def _set_placeholder(self, visible: bool) -> None:
         """지역이 없을 때 안내용 탭을 표시/제거한다."""
@@ -625,7 +658,8 @@ class CombinedMainWindow(QMainWindow):
         dash_action.triggered.connect(self._open_dashboard)
         region_menu.addAction(dash_action)
 
-        # 언어 — 선택 즉시 저장하고, 확인을 받아 같은 옵션으로 재실행한다.
+        # 언어 — 필요 시 확인을 받은 뒤 저장하고, 이 창을 그대로 새 언어로 재구성한다
+        # (프로세스 재시작 없음).
         lang_menu = menubar.addMenu(tr("언어(&L)"))
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -644,46 +678,56 @@ class CombinedMainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _change_language(self, code: str) -> None:
-        """언어를 저장하고, 사용자가 동의하면 그 언어로 프로그램을 다시 시작한다."""
+        """언어를 바꾼다 — 프로세스 재시작 없이 이 창을 그 자리에서 새 언어로 다시 구성한다.
+
+        (과거에는 exe 를 통째로 재실행했는데, frozen 빌드에서 두 인스턴스가
+        PyInstaller onefile 압축 해제 폴더를 공유하다 구 인스턴스가 먼저 종료되며
+        그 폴더를 정리해 버려 새 인스턴스가 `matplotlib` 등을 임포트하던 중
+        `ImportError: cannot import name 'ft2font' ...` 로 죽는 문제가 있었다.
+        같은 프로세스 안에서 창만 다시 구성하면 이 문제 자체가 발생하지 않는다.)
+        """
         if code == get_language():
             return
 
-        text = tr("언어를 바꾸려면 프로그램을 다시 시작해야 합니다.\n지금 다시 시작할까요?")
         if self._regions:
-            text += "\n\n" + tr("입력한 지역과 계산 결과는 저장되지 않습니다.")
-        answer = QMessageBox.question(
-            self, tr("언어 변경"), text,
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
-        )
-        if answer != QMessageBox.Yes:
-            self._lang_actions[get_language()].setChecked(True)   # 선택 되돌리기
-            return
+            answer = QMessageBox.question(
+                self, tr("언어 변경"),
+                tr("언어를 변경하면 입력한 지역과 계산 결과가 모두 사라집니다.\n계속할까요?"),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+            )
+            if answer != QMessageBox.Yes:
+                self._lang_actions[get_language()].setChecked(True)   # 선택 되돌리기
+                return
 
         save_language(code)
-        self._restart_with_language(code)
+        set_language(code)
+        self._apply_language_change()
 
-    @staticmethod
-    def _restart_with_language(code: str) -> None:
-        """--lang <code> 를 붙여 자신을 다시 실행한다 (frozen exe/소스 실행 모두 지원)."""
-        args = [a for a in sys.argv[1:] if not a.startswith("--lang")]
-        if getattr(sys, "frozen", False):
-            command = [sys.executable] + args + ["--lang", code]
-        else:
-            command = [sys.executable, os.path.abspath(sys.argv[0])] + args + ["--lang", code]
-        try:
-            subprocess.Popen(command, cwd=os.getcwd(), close_fds=True)
-        except Exception:  # noqa: BLE001 — 재실행 실패 시 종료하지 않고 그대로 둔다.
-            return
-        QApplication.instance().quit()
+    def _apply_language_change(self) -> None:
+        """현재 창을 유지한 채 전체 UI를 새 언어로 즉시 다시 구성한다."""
+        self._teardown_regions()
+        self._carbon2.close()
+        self._carbon2.deleteLater()
+        self._carbon2 = Carbon2MainWindow()
+        self._build_ui()
 
     def _build_statusbar(self) -> None:
-        bar = QStatusBar()
+        """상태바 문구를 현재 언어로 채운다.
+
+        ``self.statusBar()`` 는 이미 있으면 기존 객체를 그대로 반환하므로
+        (언어 변경으로 인한 재구성 시) 새로 만들지 않고 라벨 문구만 갱신한다
+        — QMainWindow 가 소유한 상태바 객체를 교체할 때의 소유권 문제를 피한다.
+        """
+        bar = self.statusBar()
+        if getattr(self, "_status_label", None) is not None:
+            self._status_label.setText(tr("‘+ 지역 추가’로 지역을 추가하세요."))
+            self._version_label.setText(tr("FORECAST-SW v{version}").format(version=__version__))
+            return
         self._status_label = QLabel(tr("‘+ 지역 추가’로 지역을 추가하세요."))
         bar.addWidget(self._status_label, 1)
-        version_label = QLabel(tr("FORECAST-SW v{version}").format(version=__version__))
-        version_label.setStyleSheet("color: #777;")
-        bar.addPermanentWidget(version_label)
-        self.setStatusBar(bar)
+        self._version_label = QLabel(tr("FORECAST-SW v{version}").format(version=__version__))
+        self._version_label.setStyleSheet("color: #777;")
+        bar.addPermanentWidget(self._version_label)
 
     def _show_about(self) -> None:
         QMessageBox.about(

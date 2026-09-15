@@ -248,6 +248,8 @@ The Manager opens `species_data.json` as an editable table across four tabs (Fig
 
 > When adding a species, fill in the scientific-name column so English mode displays it.
 
+UI strings follow the same pattern: [`translations_ko_en.json`](translations_ko_en.json) holds every Korean-source → English string used by the interface. Edit the English column and restart — no rebuild required; place the edited file next to a deployed `FORECAST-SW.exe` to update it the same way.
+
 ---
 
 ## 7. Build
@@ -280,6 +282,7 @@ python -m unittest discover -s tests -v
 ```
 ├── main.py                        ← entry point
 ├── species_data.json              ← equation library (77 records) — Table 2
+├── translations_ko_en.json        ← UI Korean→English strings (JSON override, no rebuild)
 ├── build_exe.py / build_updater.py / build_library_manager.bat
 ├── updater_app.py                 ← Equation Library Manager — Figure 2, stages 1–3
 ├── installer.iss                  ← Inno Setup installer script

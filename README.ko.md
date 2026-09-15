@@ -248,6 +248,8 @@ Manager는 `species_data.json` 을 4개 탭의 편집 가능한 표로 연다(Fi
 
 > 새 수종을 추가할 때는 학명 열도 채워야 영문 모드에서 학명으로 표기된다.
 
+UI 문구도 같은 방식이다: [`translations_ko_en.json`](translations_ko_en.json) 이 화면에 쓰이는 모든 한글 원문 → 영문 대응표를 담고 있다. 영문 값을 수정하고 재시작하면 바로 반영되며(재빌드 불필요), 배포된 `FORECAST-SW.exe` 옆에 수정한 파일을 두면 동일하게 적용된다.
+
 ---
 
 ## 7. 빌드
@@ -280,6 +282,7 @@ python -m unittest discover -s tests -v
 ```
 ├── main.py                        ← 실행 진입점
 ├── species_data.json              ← 상대생장식 라이브러리 (77개 레코드) — 표 2
+├── translations_ko_en.json        ← UI 한글→영문 번역표 (JSON 재정의, 재빌드 불필요)
 ├── build_exe.py / build_updater.py / build_library_manager.bat
 ├── updater_app.py                 ← Equation Library Manager — Figure 2, 1–3단계
 ├── installer.iss                  ← Inno Setup 설치 마법사 스크립트
