@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -57,12 +58,46 @@ def _venv_python(venv: Path) -> Path:
     return venv / _VENV_BIN / f"python{_EXE_EXT}"
 
 
+# pip 배포명과 import 모듈명이 다른 패키지 매핑 (requirements.txt 기준)
+_IMPORT_NAME_MAP = {
+    "pyqt5": "PyQt5",
+    "pillow": "PIL",
+    "pyinstaller": "PyInstaller",
+}
+
+
+def _requirements_import_names(req_file: Path) -> list[str]:
+    """requirements.txt 각 줄의 배포 패키지명을 import 모듈명으로 변환해 반환."""
+    if not req_file.exists():
+        return []
+    names = []
+    for line in req_file.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        pkg = re.split(r"[<>=!~\[; ]", line, 1)[0].strip()
+        if pkg:
+            names.append(_IMPORT_NAME_MAP.get(pkg.lower(), pkg))
+    return names
+
+
 def _venv_ready(python: Path) -> bool:
-    """venv 에 PyInstaller + PyQt5 가 설치되어 재사용 가능한지 확인."""
+    """venv 에 requirements.txt 의 모든 패키지 + PyInstaller 가 설치되어
+    재사용 가능한지 확인.
+
+    과거에는 PyQt5 + PyInstaller 만 확인했기 때문에, requirements.txt 에
+    pyvista/pyvistaqt/vtk 등이 나중에 추가되거나 설치가 중간에 실패해도
+    기존(불완전한) venv 를 그대로 재사용해버려 — 해당 패키지가 exe 에서
+    누락된 채 빌드되고 실행 시 ModuleNotFoundError 가 나는 문제가 있었다.
+    """
     if not python.exists():
         return False
+    modules = _requirements_import_names(REQ_FILE) + ["PyInstaller"]
+    if not modules:
+        modules = ["PyInstaller", "PyQt5"]
+    code = "; ".join(f"import {m}" for m in modules)
     r = subprocess.run(
-        [str(python), "-c", "import PyInstaller, PyQt5"],
+        [str(python), "-c", code],
         capture_output=True,
     )
     return r.returncode == 0
@@ -263,7 +298,10 @@ _mpl_datas = [
 
 # ── JSON 데이터 파일 동봉 (프로젝트 루트에 존재하는 경우만) ─────────────────────────
 _HERE_PATH = __HERE__
-_JSON_NAMES = ['carbon1_species_data.json', 'carbon2_species_data.json', 'species_data.json']
+_JSON_NAMES = [
+    'carbon1_species_data.json', 'carbon2_species_data.json', 'species_data.json',
+    'translations_ko_en.json',  # UI 한/영 번역표 — exe 옆에 두면 재빌드 없이 수정 반영
+]
 _json_datas = [
     (os.path.join(_HERE_PATH, _jn), '.')
     for _jn in _JSON_NAMES

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -52,12 +53,45 @@ def _venv_python(venv: Path) -> Path:
     return venv / _VENV_BIN / f"python{_EXE_EXT}"
 
 
+# pip 배포명과 import 모듈명이 다른 패키지 매핑 (requirements.txt 기준)
+_IMPORT_NAME_MAP = {
+    "pyqt5": "PyQt5",
+    "pillow": "PIL",
+    "pyinstaller": "PyInstaller",
+}
+
+
+def _requirements_import_names(req_file: Path) -> list[str]:
+    """requirements.txt 각 줄의 배포 패키지명을 import 모듈명으로 변환해 반환."""
+    if not req_file.exists():
+        return []
+    names = []
+    for line in req_file.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        pkg = re.split(r"[<>=!~\[; ]", line, 1)[0].strip()
+        if pkg:
+            names.append(_IMPORT_NAME_MAP.get(pkg.lower(), pkg))
+    return names
+
+
 def _venv_ready(python: Path) -> bool:
-    """venv 에 PyInstaller + PyQt5 가 설치되어 재사용 가능한지 확인."""
+    """venv 에 requirements.txt 의 모든 패키지 + PyInstaller 가 설치되어
+    재사용 가능한지 확인.
+
+    build_exe.py 와 빌드 venv 를 공유하므로, 여기서도 PyQt5 + PyInstaller
+    만 확인하면 requirements.txt 에 나중에 추가된 패키지(pyvista/pyvistaqt/
+    vtk 등)가 누락된 채로 venv 가 "준비됨"으로 오판될 수 있다.
+    """
     if not python.exists():
         return False
+    modules = _requirements_import_names(REQ_FILE) + ["PyInstaller"]
+    if not modules:
+        modules = ["PyInstaller", "PyQt5"]
+    code = "; ".join(f"import {m}" for m in modules)
     r = subprocess.run(
-        [str(python), "-c", "import PyInstaller, PyQt5"],
+        [str(python), "-c", code],
         capture_output=True,
     )
     return r.returncode == 0
@@ -68,6 +102,7 @@ _BUNDLE_ROOT_FILES = (
     "main.py",
     "build_exe.py", "release_metadata.py", "requirements.txt",
     "species_data.json",             # 기본 통합 데이터 (사용자 JSON 이 덮어씀)
+    "translations_ko_en.json",       # UI 한/영 번역표 (사용자 JSON 이 덮어씀)
 )
 _CC_DIR = HERE / "carbon_calculator"
 
