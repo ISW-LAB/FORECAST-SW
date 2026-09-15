@@ -38,7 +38,7 @@ from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QSizePolicy, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QAbstractItemView, QSizePolicy, QApplication, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPlainTextEdit, QPushButton, QScrollArea, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
@@ -77,10 +77,6 @@ _EN: dict[str, str] = {
         "Note: compiling requires Python 3.10 or later on this machine (the build "
         "environment is created automatically on first use).",
     "출력 폴더 (exe 저장 위치)": "Output folder (where the executable is written)",
-    "onedir 모드": "onedir mode",
-    "디버그 콘솔": "Debug console",
-    "UPX 압축": "UPX compression",
-    "캐시 초기화": "Clear cache",
     "새 exe 빌드 (PyInstaller)": "Build new executable (PyInstaller)",
     "준비": "Ready",
     "빌드 중...": "Building...",
@@ -1420,16 +1416,6 @@ class UpdaterWindow(QMainWindow):
         self.out_row.edit.textEdited.connect(self._mark_out_edited)
         bl.addWidget(self.out_row)
 
-        opt_row = QHBoxLayout()
-        self.onedir_cb = QCheckBox(tr("onedir 모드"))
-        self.debug_cb  = QCheckBox(tr("디버그 콘솔"))
-        self.upx_cb    = QCheckBox(tr("UPX 압축"))
-        self.clean_cb  = QCheckBox(tr("캐시 초기화"))
-        for cb in (self.onedir_cb, self.debug_cb, self.upx_cb, self.clean_cb):
-            opt_row.addWidget(cb)
-        opt_row.addStretch()
-        bl.addLayout(opt_row)
-
         self.build_btn = QPushButton(tr("새 exe 빌드 (PyInstaller)"))
         self.build_btn.setObjectName("primaryAction")
         self.build_btn.setFixedHeight(_px(48))
@@ -1579,11 +1565,9 @@ class UpdaterWindow(QMainWindow):
             self._set_build_status(tr("출력 폴더를 지정하세요."), "red")
             return
 
+        # 표준 릴리스 빌드(onefile · 콘솔 숨김 · UPX 없음)만 지원한다 — 나머지는
+        # 개발자용 CLI 플래그로만 남겨둔다 (build_exe.py --help 참고).
         options: list[str] = []
-        if self.onedir_cb.isChecked(): options.append("--onedir")
-        if self.debug_cb.isChecked():  options.append("--debug")
-        if self.upx_cb.isChecked():    options.append("--upx")
-        if self.clean_cb.isChecked():  options.append("--clean-cache")
 
         self.log.clear()
         self.build_btn.setEnabled(False)
