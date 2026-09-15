@@ -12,9 +12,13 @@ installer_output/
 # Build venv (build_exe.py / build_updater.py create this outside Code/, but ignore just in case)
 .build_venv/
 
+# Local development venvs (e.g. `sejong/`, created ad hoc inside the repo)
+sejong/
+
 # Editor/OS
 .vscode/
 .idea/
+.claude/
 Thumbs.db
 .DS_Store
 
