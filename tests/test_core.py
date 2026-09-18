@@ -28,6 +28,7 @@ from carbon_calculator.data import (
     tree_species_for_env,
 )
 from carbon_calculator.data2 import DOMESTIC_SPECIES, FOREIGN_SPECIES
+from carbon_calculator import species_library
 from carbon_calculator.equation_eval import EvaluationError, evaluate
 from carbon_calculator.excel_export import export_all_regions_to_excel
 from carbon_calculator.i18n import missing_scientific_names, tr
@@ -153,6 +154,127 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(len(SHRUB_SPECIES), 15)
         self.assertEqual(len(DOMESTIC_SPECIES), 30)
         self.assertEqual(len(FOREIGN_SPECIES), 25)
+
+
+class SpeciesLibraryTests(unittest.TestCase):
+    """평가 화면이 쓰는 통합 라이브러리 (77종) 계층."""
+
+    def test_every_library_record_is_selectable_in_one_input_tab(self) -> None:
+        """77개 레코드 전체가 교목/관목 탭 중 정확히 한 곳에 들어간다."""
+        everything = species_library.all_records()
+        self.assertEqual(len(everything), 77)
+
+        trees = species_library.records_for_kind(species_library.KIND_TREE)
+        shrubs = species_library.records_for_kind(species_library.KIND_SHRUB)
+        self.assertEqual(len(trees) + len(shrubs), 77)
+        self.assertEqual(set(trees) & set(shrubs), set())
+        self.assertEqual(set(trees) | set(shrubs), set(everything))
+
+    def test_growth_form_follows_the_predictor_variable(self) -> None:
+        """설명변수가 RCD 인 레코드는 관목, DBH 인 레코드는 교목으로 분류된다."""
+        for key, record in species_library.all_records().items():
+            if key in species_library.KIND_OVERRIDES:
+                continue
+            with self.subTest(species=key):
+                expected = (species_library.KIND_SHRUB
+                            if "RCD" in record.var1_label.upper()
+                            else species_library.KIND_TREE)
+                self.assertEqual(record.kind, expected)
+
+    def test_year_projection_is_limited_to_records_with_growth_increments(self) -> None:
+        """연도축 추정은 성장차를 보유한 core 22종만 지원한다."""
+        supported = [r for r in species_library.all_records().values()
+                     if r.supports_year_projection]
+        self.assertEqual(len(supported), 22)
+        for record in supported:
+            with self.subTest(species=record.key):
+                self.assertIsNotNone(record.species_data)
+        for record in species_library.all_records().values():
+            if record.is_extension:
+                with self.subTest(species=record.key):
+                    self.assertFalse(record.supports_year_projection)
+                    self.assertIsNone(record.species_data)
+
+    @staticmethod
+    def _representative_input(record) -> float:
+        """유효범위 안의 대표 입력값.
+
+        `곰솔(지상부, 경남)` 처럼 출처가 하한을 0 으로 준 레코드가 있는데 식에
+        `ln(X)` 가 들어가면 X=0 에서 정의되지 않으므로, 하한이 0 이면 구간
+        중앙을 쓴다(입력 위젯도 0 을 허용하지 않는다).
+        """
+        if not record.has_range:
+            return 10.0
+        if record.range_min > 0:
+            return record.range_min
+        return (record.range_min + record.range_max) / 2.0
+
+    def test_every_record_yields_a_finite_diameter_curve(self) -> None:
+        """77종 전부가 직경축 곡선을 만들 수 있다 (확장 레코드 포함)."""
+        for key, record in species_library.all_records().items():
+            with self.subTest(species=key):
+                x = self._representative_input(record)
+                var2 = record.var2_default if record.is_multivar else None
+
+                carbon = species_library.carbon_per_individual(record, x, var2)
+                self.assertTrue(math.isfinite(carbon))
+                self.assertGreaterEqual(carbon, 0.0)
+
+                axis = species_library.diameter_axis(record, x)
+                curve = species_library.carbon_by_diameter(record, axis, 3, var2)
+                self.assertEqual(len(axis), len(curve))
+                self.assertTrue(all(value > 0 for value in axis))
+                finite = [value for value in curve if math.isfinite(value)]
+                self.assertGreater(len(finite), len(curve) // 2)
+
+    def test_diameter_axis_covers_the_fitted_range_when_provided(self) -> None:
+        records = species_library.all_records()
+        bounded = records["백합나무(전체)"]          # 6~39 cm
+        axis = species_library.diameter_axis(bounded, 20.0)
+        self.assertAlmostEqual(float(axis[0]), bounded.range_min, places=9)
+        self.assertAlmostEqual(float(axis[-1]), bounded.range_max, places=9)
+        self.assertIn(20.0, [float(v) for v in axis])
+
+    def test_diameter_axis_brackets_the_input_when_no_range_is_published(self) -> None:
+        """유효범위가 없는 레코드는 입력값 주변만 훑고 0 을 포함하지 않는다."""
+        unbounded = species_library.all_records()["까치박달(전체)"]
+        self.assertFalse(unbounded.has_range)
+        axis = species_library.diameter_axis(unbounded, 18.0)
+        self.assertGreater(float(axis[0]), 0.0)
+        self.assertLess(float(axis[0]), 18.0)
+        self.assertGreater(float(axis[-1]), 18.0)
+
+    def test_range_guard_rejects_inputs_outside_the_fitted_domain(self) -> None:
+        record = species_library.all_records()["백합나무(전체)"]   # 6~39 cm
+        species_library.check_range(record, 6.0)
+        species_library.check_range(record, 39.0)
+        for value in (5.9, 39.1):
+            with self.subTest(diameter=value):
+                with self.assertRaises(species_library.LibraryError):
+                    species_library.check_range(record, value)
+
+    def test_extension_carbon_matches_the_equation_evaluator(self) -> None:
+        """확장 레코드의 탄소량 = 식 평가값 × 탄소전환계수 × 개체수."""
+        record = species_library.all_records()["백합나무(전체)"]
+        biomass = evaluate(record.equation, 20.0)
+        expected = biomass * species_library.CARBON_FACTOR * 4
+        self.assertAlmostEqual(
+            species_library.carbon_total(record, 20.0, 4), expected, places=9,
+        )
+
+    def test_core_carbon_matches_the_published_allometric_formula(self) -> None:
+        """core 레코드의 탄소량은 기존 calculate_carbon 경로와 일치한다."""
+        for kind in (species_library.KIND_TREE, species_library.KIND_SHRUB):
+            for key, record in species_library.records_for_kind(kind).items():
+                if not record.is_core:
+                    continue
+                with self.subTest(species=key):
+                    diameter = self._representative_input(record)
+                    expected = calculate_carbon(key, record.species_data, diameter, 3)
+                    self.assertAlmostEqual(
+                        species_library.carbon_total(record, diameter, 3),
+                        expected.carbon_kg, places=9,
+                    )
 
     def test_bundled_json_is_parseable_and_licensed(self) -> None:
         payload = json.loads((REPOSITORY_ROOT / "species_data.json").read_text(encoding="utf-8"))

@@ -34,6 +34,8 @@ from .calculations import (
     CarbonRow, RangeViolation, calculate_carbon, project_future_carbon,
 )
 from .i18n import environment_name, species_name, tr
+from . import species_library as lib
+from .species_library import LibraryError, LibraryRecord
 from .input_limits import (
     SHRUB_PLANTING_AREA_M2_PER_INDIVIDUAL,
     TREE_PLANTING_AREA_M2_PER_INDIVIDUAL,
@@ -56,21 +58,36 @@ from .tree_simulation.visualization_tab import VegetationVisualizationTab
 
 
 # 한 행의 계산 결과 + 그래프 투영에 필요한 모든 정보를 담는 경량 컨테이너.
-# label / curve 는 계산 후 `_build_curves` 에서 채워진다 (50년 투영 곡선).
+# label / curve 는 계산 후 `_build_curves` 에서 채워진다.
+#   curve      : 연도축 곡선 (성장차를 가진 core 레코드만)
+#   d_axis/d_curve : 직경축 곡선 (77종 전부)
 @dataclass
 class _Entry:
     species: str
-    species_data: SpeciesData  # 오버라이드가 적용된 최종 계수
+    record: LibraryRecord      # core·extension 공통 레코드
+    species_data: Optional[SpeciesData]   # core 만: 오버라이드가 적용된 최종 계수
     diameter: float
     quantity: int
     carbon_kg: float
     unit: str
+    var2: Optional[float] = None   # 다변수 식의 두 번째 입력(수고·밀도·LAI·길이)
     label: str = ""
-    curve: object = None       # numpy 배열 (연도별 탄소저장량) — _build_curves 에서 설정
+    curve: object = None       # numpy 배열 (연도별) — core 만
+    d_axis: object = None      # numpy 배열 (직경축 x)
+    d_curve: object = None     # numpy 배열 (직경축 탄소저장량)
+
+    @property
+    def supports_year_projection(self) -> bool:
+        """연도축 50년 추정이 가능한 항목인지 (성장차 보유 = core)."""
+        return self.species_data is not None and self.record.supports_year_projection
 
 
 # 사용자 편집 가능한 (a, b, CF) 오버라이드 타입.
 OverrideCoeffs = Tuple[float, float, float]
+
+# 추정 그래프 x축 기준.
+BASIS_YEAR = "year"
+BASIS_DIAMETER = "diameter"
 
 TEST_TREE_QUANTITY_RANGE = (3, 10)
 TEST_SHRUB_QUANTITY_RANGE = (3, 12)
@@ -100,9 +117,10 @@ class AddSpeciesDialog(QDialog):
 
         self.setWindowTitle(tr("교목 추가") if is_tree else tr("관목 추가"))
         self.setModal(True)
-        apply_dialog_size(self, 820, 500)
+        apply_dialog_size(self, 820, 560)
 
-        # 환경별로 해석된 수종 맵/목록을 호출측(MainWindow)에서 주입받는다.
+        # 통합 라이브러리 레코드 맵/목록을 호출측(MainWindow)에서 주입받는다.
+        # core(계수 a·b·CF + 성장차)와 extension(식 문자열)이 함께 들어온다.
         self._species_map = species_map
         self._names = list(names)
         self._last_random_test_values: tuple[str, float, int] | None = None
@@ -171,7 +189,19 @@ class AddSpeciesDialog(QDialog):
         self.diameter_spin.setSingleStep(0.1)
         self.diameter_spin.setRange(0.01, 100000.0)
         self.diameter_spin.setValue(1.0)
-        form.addRow(diameter_label, self.diameter_spin)
+        self._diameter_label_widget = QLabel(diameter_label)
+        form.addRow(self._diameter_label_widget, self.diameter_spin)
+
+        # 다변수 식(수고·임분밀도·LAI·길이)에서만 보이는 두 번째 입력.
+        self.var2_spin = NoWheelDoubleSpinBox()
+        self.var2_spin.setDecimals(2)
+        self.var2_spin.setSingleStep(0.5)
+        self.var2_spin.setRange(0.0, 1000000.0)
+        self.var2_spin.setValue(10.0)
+        self._var2_label_widget = QLabel(tr("두 번째 변수"))
+        form.addRow(self._var2_label_widget, self.var2_spin)
+        self._var2_label_widget.setVisible(False)
+        self.var2_spin.setVisible(False)
 
         self.quantity_spin = NoWheelSpinBox()
         self.quantity_spin.setRange(1, 99999)
@@ -221,9 +251,9 @@ class AddSpeciesDialog(QDialog):
         form.addRow(tr("탄소전환계수 CF"), self.cf_spin)
         eq_layout.addLayout(form)
 
-        reset_btn = QPushButton(tr("기본값으로 복원"))
-        reset_btn.clicked.connect(self._reset_to_defaults)
-        eq_layout.addWidget(reset_btn, alignment=Qt.AlignRight)
+        self.reset_button = QPushButton(tr("기본값으로 복원"))
+        self.reset_button.clicked.connect(self._reset_to_defaults)
+        eq_layout.addWidget(self.reset_button, alignment=Qt.AlignRight)
         v.addWidget(eq_group)
 
         # (2) CSV 권장 정보 (읽기 전용)
@@ -232,6 +262,7 @@ class AddSpeciesDialog(QDialog):
         info_layout.setSpacing(6)
 
         self.range_value_label = QLabel("-")
+        self.range_value_label.setWordWrap(True)
         info_layout.addRow(tr("유효 직경 범위"), self.range_value_label)
 
         self.growth_value_label = QLabel("-")
@@ -242,28 +273,43 @@ class AddSpeciesDialog(QDialog):
         info_layout.addRow(tr("기본 (a, b, CF)"), self.default_coeffs_label)
 
         v.addWidget(info_group)
+
+        # 레코드 출처·그래프 지원 기준 안내 (확장 라이브러리는 직경축만 가능).
+        self.source_note_label = QLabel()
+        self.source_note_label.setWordWrap(True)
+        self.source_note_label.setStyleSheet(
+            "color: #7A5C00; background: #FFF8E1; border: 1px solid #F0E0A0; "
+            "border-radius: 4px; padding: 6px;"
+        )
+        v.addWidget(self.source_note_label)
+
         v.addStretch(1)
         return wrap
 
     # ----- 이벤트 -----
 
     @staticmethod
-    def _test_diameter_range(sp: SpeciesData) -> tuple[float, float]:
+    def _test_diameter_range(rec: LibraryRecord) -> tuple[float, float]:
         """수종 유효 범위(cm)의 양 끝 10%를 가급적 피한 테스트 구간."""
-        span = max(0.0, sp.diameter_max - sp.diameter_min)
-        low = sp.diameter_min + span * TEST_DIAMETER_MARGIN_RATIO
-        high = sp.diameter_max - span * TEST_DIAMETER_MARGIN_RATIO
+        span = max(0.0, rec.range_max - rec.range_min)
+        low = rec.range_min + span * TEST_DIAMETER_MARGIN_RATIO
+        high = rec.range_max - span * TEST_DIAMETER_MARGIN_RATIO
         if low > high:
-            low = sp.diameter_min
-            high = sp.diameter_max
+            low = rec.range_min
+            high = rec.range_max
         if low > high:
-            value = (sp.diameter_min + sp.diameter_max) / 2.0
+            value = (rec.range_min + rec.range_max) / 2.0
             return value, value
         return low, high
 
     def _fill_random_test_values(self) -> None:
-        """기존 선택/검증 경로를 유지하면서 유효한 테스트 값만 채운다."""
-        available = [name for name in self._names if name in self._species_map]
+        """기존 선택/검증 경로를 유지하면서 유효한 테스트 값만 채운다.
+
+        유효범위가 제공되지 않은 레코드(확장 라이브러리 일부)는 테스트 값을
+        생성할 정의역이 없으므로 후보에서 제외한다.
+        """
+        available = [name for name in self._names
+                     if name in self._species_map and self._species_map[name].has_range]
         if not available:
             return
         quantity_low, quantity_high = (
@@ -272,10 +318,10 @@ class AddSpeciesDialog(QDialog):
         candidate = None
         for _ in range(20):
             species = random.choice(available)
-            sp = self._species_map[species]
-            diameter_low, diameter_high = self._test_diameter_range(sp)
+            rec = self._species_map[species]
+            diameter_low, diameter_high = self._test_diameter_range(rec)
             diameter = round(random.uniform(diameter_low, diameter_high), 1)
-            diameter = max(sp.diameter_min, min(sp.diameter_max, diameter))
+            diameter = max(rec.range_min, min(rec.range_max, diameter))
             candidate = (species, diameter, random.randint(quantity_low, quantity_high))
             if candidate != self._last_random_test_values:
                 break
@@ -298,57 +344,100 @@ class AddSpeciesDialog(QDialog):
         self.quantity_spin.setValue(quantity)
 
     def _on_species_changed(self, species: str) -> None:
-        sp = self._species_map.get(species)
-        if sp is None:
+        rec = self._species_map.get(species)
+        if rec is None:
             return
-        # 우측 편집 스피너 = 기본값
+
+        # 설명변수 라벨 — 레코드마다 DBH/RCD/수고가 다르다.
+        self._diameter_label_widget.setText(
+            tr("변수 ({label})").format(label=rec.var1_label))
+
+        # 두 번째 변수 입력(다변수 식만).
+        self._var2_label_widget.setVisible(rec.is_multivar)
+        self.var2_spin.setVisible(rec.is_multivar)
+        if rec.is_multivar:
+            self._var2_label_widget.setText(rec.var2_label)
+            self.var2_spin.setRange(float(rec.var2_min), float(rec.var2_max))
+            self.var2_spin.setValue(float(rec.var2_default))
+
+        # 계수 편집은 core 레코드에서만 의미가 있다 (extension 은 식 문자열).
+        sp = rec.species_data
+        editable = sp is not None
+        for spin in (self.a_spin, self.b_spin, self.cf_spin):
+            spin.setEnabled(editable)
+        self.reset_button.setEnabled(editable)
+
         self.a_spin.blockSignals(True); self.b_spin.blockSignals(True); self.cf_spin.blockSignals(True)
-        self.a_spin.setValue(sp.a)
-        self.b_spin.setValue(sp.b)
-        self.cf_spin.setValue(sp.cf)
+        if sp is not None:
+            self.a_spin.setValue(sp.a)
+            self.b_spin.setValue(sp.b)
+            self.cf_spin.setValue(sp.cf)
+        else:
+            self.a_spin.setValue(0.0)
+            self.b_spin.setValue(0.0)
+            self.cf_spin.setValue(lib.CARBON_FACTOR)
         self.a_spin.blockSignals(False); self.b_spin.blockSignals(False); self.cf_spin.blockSignals(False)
+
         # 직경 입력은 제한하지 않는다(범위 밖 값도 입력 가능). 다만 수종을 바꿨을 때
         # 현재 값이 새 수종의 유효 범위를 벗어나면 유효 최소값으로 한 번 맞춰 주어
         # 합리적인 기본값에서 시작하도록 한다(사용자는 이후 자유롭게 수정 가능).
-        d = self.diameter_spin.value()
-        if d < sp.diameter_min or d > sp.diameter_max:
-            self.diameter_spin.setValue(float(sp.diameter_min))
-        # CSV 정보 표시
-        u = self._diameter_unit
-        self.range_value_label.setText(f"{sp.diameter_min:g} {u} ~ {sp.diameter_max:g} {u}")
-        self.growth_value_label.setText(
-            f"{sp.growth_y10:.2f}  /  {sp.growth_y20:.2f}  /  {sp.growth_y21:.2f}"
-        )
-        self.default_coeffs_label.setText(f"a = {sp.a:g} ,  b = {sp.b:g} ,  CF = {sp.cf:g}")
+        if rec.has_range:
+            d = self.diameter_spin.value()
+            if d < rec.range_min or d > rec.range_max:
+                self.diameter_spin.setValue(max(0.01, float(rec.range_min)))
+
+        # 참고 정보 표시
+        self.range_value_label.setText(rec.range_text())
+        if sp is not None:
+            self.growth_value_label.setText(
+                f"{sp.growth_y10:.2f}  /  {sp.growth_y20:.2f}  /  {sp.growth_y21:.2f}"
+            )
+            self.default_coeffs_label.setText(
+                f"a = {sp.a:g} ,  b = {sp.b:g} ,  CF = {sp.cf:g}")
+            self.source_note_label.setText(
+                tr("핵심 라이브러리 수종 — 연도별·직경 기준 그래프를 모두 지원합니다."))
+        else:
+            self.growth_value_label.setText(tr("제공 없음 — 직경 기준 그래프만 가능"))
+            self.default_coeffs_label.setText(tr("식 문자열 기반 (계수 편집 불가)"))
+            self.source_note_label.setText(
+                tr("확장 라이브러리 수종 — 연도별 성장차가 없어 직경 기준 그래프만 "
+                   "지원하며, 3D 시각화에는 포함되지 않습니다."))
         self._refresh_formula()
 
     def _refresh_formula(self) -> None:
+        species = self.combo.current_data()
+        rec = self._species_map.get(species)
+        if rec is None:
+            return
+        if rec.species_data is None:
+            self.formula_label.setText(
+                f"{rec.formula_text()}      X = {rec.var1_label}")
+            return
         a = self.a_spin.value()
         b = self.b_spin.value()
         cf = self.cf_spin.value()
-        sp = self._species_map.get(self.combo.current_data())
-        x_term = "(10 × X)" if sp and sp.equation_diameter_unit == "mm" else "X"
-        diameter_name = "DBH" if self.kind == "tree" else "RCD"
+        x_term = "(10 × X)" if rec.species_data.equation_diameter_unit == "mm" else "X"
         self.formula_label.setText(
             f"Y  =  {a:g}  ×  {x_term}^{b:g}      C  =  Y  ×  {cf:g}  ×  N"
-            f"      X = {diameter_name} (cm)"
+            f"      X = {rec.var1_label}"
         )
 
     def _reset_to_defaults(self) -> None:
-        sp = self._species_map.get(self.combo.current_data())
-        if sp is None:
+        rec = self._species_map.get(self.combo.current_data())
+        if rec is None or rec.species_data is None:
             return
+        sp = rec.species_data
         self.a_spin.setValue(sp.a)
         self.b_spin.setValue(sp.b)
         self.cf_spin.setValue(sp.cf)
 
     def accept(self) -> None:
-        """'추가' 시 유효 직경 범위를 검증. 범위 밖이면 경고 후 다이얼로그를 닫지 않는다."""
+        """'추가' 시 유효 범위와 식 평가 가능성을 검증. 실패 시 다이얼로그를 닫지 않는다."""
         species = self.combo.current_data()
-        sp = self._species_map.get(species)
-        if sp is not None:
+        rec = self._species_map.get(species)
+        if rec is not None:
             d = self.diameter_spin.value()
-            if d < sp.diameter_min or d > sp.diameter_max:
+            if rec.has_range and (d < rec.range_min or d > rec.range_max):
                 u = self._diameter_unit
                 QMessageBox.warning(
                     self, tr("유효 직경 범위 아님"),
@@ -356,30 +445,50 @@ class AddSpeciesDialog(QDialog):
                        "({vmin:g} {u} ~ {vmax:g} {u})를 벗어납니다.\n\n"
                        "값을 유효 범위 안으로 수정한 뒤 다시 [추가]를 눌러 주세요.")
                     .format(d=d, u=u, species=species_name(species),
-                            vmin=sp.diameter_min, vmax=sp.diameter_max),
+                            vmin=rec.range_min, vmax=rec.range_max),
                 )
                 self.diameter_spin.setFocus()
                 self.diameter_spin.selectAll()
                 return  # 다이얼로그 유지 — 행은 추가되지 않음
+
+            # 확장 레코드는 입력값에서 식이 실제로 평가되는지 미리 확인한다
+            # (로그 항의 정의역 밖 입력 등을 추가 시점에 잡아낸다).
+            if rec.species_data is None:
+                try:
+                    lib.carbon_per_individual(rec, d, self._current_var2(rec))
+                except LibraryError as exc:
+                    QMessageBox.warning(self, tr("입력값 오류"), str(exc))
+                    self.diameter_spin.setFocus()
+                    self.diameter_spin.selectAll()
+                    return
         super().accept()
 
     # ----- 결과 -----
 
-    def values(self) -> Tuple[str, float, int, Optional[OverrideCoeffs]]:
+    def _current_var2(self, rec: LibraryRecord) -> Optional[float]:
+        return self.var2_spin.value() if rec.is_multivar else None
+
+    def values(self) -> Tuple[str, float, int, Optional[OverrideCoeffs], Optional[float]]:
         """
-        Returns: (species, diameter, quantity, override_coeffs_or_None)
-        override_coeffs 는 a/b/CF 중 하나라도 기본값에서 변경된 경우에만 (a, b, cf) 튜플.
+        Returns: (species, diameter, quantity, override_coeffs_or_None, var2_or_None)
+        override_coeffs 는 core 레코드에서 a/b/CF 중 하나라도 기본값에서 변경된 경우에만
+        (a, b, cf) 튜플. extension 레코드는 항상 None.
         """
         species = self.combo.current_data()
         diameter = self.diameter_spin.value()
         quantity = self.quantity_spin.value()
 
-        current: OverrideCoeffs = (self.a_spin.value(), self.b_spin.value(), self.cf_spin.value())
-        sp = self._species_map.get(species)
-        default: OverrideCoeffs = (sp.a, sp.b, sp.cf) if sp else (0.0, 0.0, 0.0)
-        override = None if _coeffs_equal(current, default) else current
+        rec = self._species_map.get(species)
+        override = None
+        if rec is not None and rec.species_data is not None:
+            sp = rec.species_data
+            current: OverrideCoeffs = (
+                self.a_spin.value(), self.b_spin.value(), self.cf_spin.value())
+            if not _coeffs_equal(current, (sp.a, sp.b, sp.cf)):
+                override = current
 
-        return species, diameter, quantity, override
+        var2 = self._current_var2(rec) if rec is not None else None
+        return species, diameter, quantity, override, var2
 
 
 # ------------------------------ 동적 입력 행 --------------------------------
@@ -394,11 +503,14 @@ class SpeciesInputRow(QFrame):
     deleted = pyqtSignal(object)         # emits self
 
     def __init__(self, kind: str, species: str, diameter: float, quantity: int,
-                 names: list, override_coeffs: Optional[OverrideCoeffs] = None, parent=None):
+                 names: list, override_coeffs: Optional[OverrideCoeffs] = None,
+                 records: Optional[dict] = None, var2: Optional[float] = None,
+                 parent=None):
         super().__init__(parent)
         self.kind = kind
         is_tree = kind == "tree"
         self._override_coeffs: Optional[OverrideCoeffs] = override_coeffs
+        self._records = records or {}
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(
             "QFrame { background: #FBFDFC; border: 1px solid #DCE1E6; border-radius: 8px; }"
@@ -436,12 +548,12 @@ class SpeciesInputRow(QFrame):
         top.addWidget(self.delete_button)
         outer.addLayout(top)
 
-        # 2행: 직경
+        # 2행: 직경(설명변수)
         d_row = QHBoxLayout()
         d_row.setSpacing(4)
-        d_label = QLabel(diameter_label)
-        d_label.setMinimumWidth(px(60))
-        d_row.addWidget(d_label)
+        self._d_label = QLabel(diameter_label)
+        self._d_label.setMinimumWidth(px(60))
+        d_row.addWidget(self._d_label)
         self.diameter_spin = NoWheelDoubleSpinBox()
         self.diameter_spin.setDecimals(2)
         self.diameter_spin.setSingleStep(0.1)
@@ -449,6 +561,20 @@ class SpeciesInputRow(QFrame):
         self.diameter_spin.setValue(max(0.01, float(diameter)))
         d_row.addWidget(self.diameter_spin, 1)
         outer.addLayout(d_row)
+
+        # 2-1행: 두 번째 변수 (다변수 식 수종만 표시)
+        v2_row = QHBoxLayout()
+        v2_row.setSpacing(4)
+        self._v2_label = QLabel(tr("두 번째 변수"))
+        self._v2_label.setMinimumWidth(px(60))
+        v2_row.addWidget(self._v2_label)
+        self.var2_spin = NoWheelDoubleSpinBox()
+        self.var2_spin.setDecimals(2)
+        self.var2_spin.setSingleStep(0.5)
+        self.var2_spin.setRange(0.0, 1000000.0)
+        v2_row.addWidget(self.var2_spin, 1)
+        outer.addLayout(v2_row)
+        self._initial_var2 = var2
 
         # 3행: 수량
         q_row = QHBoxLayout()
@@ -470,6 +596,7 @@ class SpeciesInputRow(QFrame):
         self.override_label.setVisible(False)
         outer.addWidget(self.override_label)
         self._refresh_override_label()
+        self._refresh_for_record(initial=True)
 
     def _on_delete(self) -> None:
         self.deleted.emit(self)
@@ -481,6 +608,31 @@ class SpeciesInputRow(QFrame):
         if self._override_coeffs is not None:
             self._override_coeffs = None
             self._refresh_override_label()
+        self._refresh_for_record()
+
+    def _current_record(self):
+        return self._records.get(self.combo.currentData())
+
+    def _refresh_for_record(self, initial: bool = False) -> None:
+        """선택된 레코드에 맞춰 변수 라벨과 두 번째 변수 입력을 갱신한다."""
+        rec = self._current_record()
+        if rec is None:
+            self._v2_label.setVisible(False)
+            self.var2_spin.setVisible(False)
+            return
+        self._d_label.setText(rec.predictor_short + "(cm)"
+                              if rec.predictor_short in ("DBH", "RCD")
+                              else rec.var1_label)
+        multivar = rec.is_multivar
+        self._v2_label.setVisible(multivar)
+        self.var2_spin.setVisible(multivar)
+        if not multivar:
+            return
+        self._v2_label.setText(rec.var2_label)
+        self.var2_spin.setRange(float(rec.var2_min), float(rec.var2_max))
+        value = self._initial_var2 if (initial and self._initial_var2 is not None) \
+            else float(rec.var2_default)
+        self.var2_spin.setValue(float(value))
 
     def _refresh_override_label(self) -> None:
         if self._override_coeffs is None:
@@ -495,6 +647,13 @@ class SpeciesInputRow(QFrame):
     def values(self) -> Tuple[str, float, int]:
         return (self.combo.currentData(), self.diameter_spin.value(),
                 self.quantity_spin.value())
+
+    def var2_value(self) -> Optional[float]:
+        """다변수 식 수종의 두 번째 입력. 단일변수 수종은 None."""
+        rec = self._current_record()
+        if rec is None or not rec.is_multivar:
+            return None
+        return self.var2_spin.value()
 
     def override_coeffs(self) -> Optional[OverrideCoeffs]:
         return self._override_coeffs
@@ -520,10 +679,21 @@ class MainWindow(QMainWindow):
 
         # 대상지 유형은 보고서 메타데이터이며 수종별 기본 계수는 모든 대상지에서 동일하다.
         self.environment = environment
-        self._tree_species = tree_species_for_env(environment)
-        self._shrub_species = shrub_species_for_env(environment)
-        self._tree_names = list(self._tree_species.keys())
-        self._shrub_names = list(self._shrub_species.keys())
+
+        # 통합 라이브러리 77종 — 설명변수가 DBH 인 레코드는 교목 탭, RCD 는 관목 탭.
+        # 각 맵은 core(성장차 보유) 를 먼저, 확장 레코드를 뒤에 둔다.
+        self._tree_records = lib.records_for_kind(lib.KIND_TREE)
+        self._shrub_records = lib.records_for_kind(lib.KIND_SHRUB)
+        self._tree_names = list(self._tree_records.keys())
+        self._shrub_names = list(self._shrub_records.keys())
+
+        # 3D 시각화는 성장차가 필요하므로 core 전용 맵을 따로 유지한다.
+        self._tree_species = lib.core_records_for_kind(lib.KIND_TREE)
+        self._shrub_species = lib.core_records_for_kind(lib.KIND_SHRUB)
+
+        # 추정 그래프 x축 기준 (연도별 / 직경)
+        self._tree_basis = BASIS_YEAR
+        self._shrub_basis = BASIS_YEAR
 
         self.tree_rows: List[SpeciesInputRow] = []
         self.shrub_rows: List[SpeciesInputRow] = []
@@ -661,20 +831,24 @@ class MainWindow(QMainWindow):
 
     def _open_add_dialog(self, kind: str) -> None:
         if kind == "tree":
-            species_map, names = self._tree_species, self._tree_names
+            species_map, names = self._tree_records, self._tree_names
         else:
-            species_map, names = self._shrub_species, self._shrub_names
+            species_map, names = self._shrub_records, self._shrub_names
         dlg = AddSpeciesDialog(kind, species_map, names, self)
         if dlg.exec_() != QDialog.Accepted:
             return
-        species, diameter, quantity, override = dlg.values()
-        self._append_row(kind, species, diameter, quantity, override_coeffs=override)
+        species, diameter, quantity, override, var2 = dlg.values()
+        self._append_row(kind, species, diameter, quantity,
+                         override_coeffs=override, var2=var2)
 
     def _append_row(self, kind: str, species: str, diameter: float, quantity: int,
-                    override_coeffs: Optional[OverrideCoeffs] = None) -> None:
+                    override_coeffs: Optional[OverrideCoeffs] = None,
+                    var2: Optional[float] = None) -> None:
         names = self._tree_names if kind == "tree" else self._shrub_names
+        records = self._tree_records if kind == "tree" else self._shrub_records
         row = SpeciesInputRow(kind, species, diameter, quantity, names,
-                              override_coeffs=override_coeffs)
+                              override_coeffs=override_coeffs,
+                              records=records, var2=var2)
         row.deleted.connect(self._on_row_deleted)
 
         if kind == "tree":
@@ -766,8 +940,8 @@ class MainWindow(QMainWindow):
         tables.setContentsMargins(0, 0, 0, 0)
         self.tree_table = self._make_result_table()
         self.shrub_table = self._make_result_table()
-        tables.addLayout(self._table_box(tr("교목 결과 (DBH·cm)"), self.tree_table))
-        tables.addLayout(self._table_box(tr("관목 결과 (RCD·cm)"), self.shrub_table))
+        tables.addLayout(self._table_box(tr("교목 결과 (DBH·cm)"), self.tree_table, "tree"))
+        tables.addLayout(self._table_box(tr("관목 결과 (RCD·cm)"), self.shrub_table, "shrub"))
 
         # 그래프(sub tab) ↔ 결과 테이블 사이 높이를 세로 드래그로 조절
         body_splitter = QSplitter(Qt.Vertical)
@@ -782,7 +956,7 @@ class MainWindow(QMainWindow):
         return wrap
 
     def _build_estimation_tab(self, kind: str) -> QWidget:
-        """추정 곡선 sub tab: [항목별 표시 체크박스 범례] + [추정 곡선 캔버스]."""
+        """추정 곡선 sub tab: [x축 기준 선택] + [항목별 표시 체크박스 범례] + [캔버스]."""
         canvas = self.tree_canvas if kind == "tree" else self.shrub_canvas
 
         wrap = QFrame()
@@ -790,6 +964,33 @@ class MainWindow(QMainWindow):
         col = QVBoxLayout(wrap)
         col.setContentsMargins(2, 2, 2, 2)
         col.setSpacing(2)
+
+        # x축 기준 선택 — 연도별(성장차 보유 수종만) / 직경(전체 수종)
+        basis_row = QHBoxLayout()
+        basis_row.setContentsMargins(4, 0, 4, 0)
+        basis_row.setSpacing(6)
+        basis_row.addWidget(QLabel(tr("그래프 기준")))
+        basis_combo = NoWheelComboBox()
+        basis_combo.addItem(tr("연도별 (향후 50년)"), BASIS_YEAR)
+        basis_combo.addItem(tr("직경별 (DBH · RCD)"), BASIS_DIAMETER)
+        basis_combo.setToolTip(
+            tr("연도별은 연간 성장차를 보유한 수종만 표시됩니다. "
+               "직경별은 유효범위를 훑어 전체 수종을 표시합니다.")
+        )
+        basis_combo.currentIndexChanged.connect(
+            lambda _i, k=kind: self._on_basis_changed(k))
+        basis_row.addWidget(basis_combo)
+        basis_note = QLabel()
+        basis_note.setStyleSheet("color: #7A5C00;")
+        basis_row.addWidget(basis_note, 1)
+        col.addLayout(basis_row)
+
+        if kind == "tree":
+            self._tree_basis_combo = basis_combo
+            self._tree_basis_note = basis_note
+        else:
+            self._shrub_basis_combo = basis_combo
+            self._shrub_basis_note = basis_note
 
         legend_scroll = QScrollArea()
         legend_scroll.setWidgetResizable(True)
@@ -879,7 +1080,8 @@ class MainWindow(QMainWindow):
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         return table
 
-    def _table_box(self, title: str, table: QTableWidget) -> QVBoxLayout:
+    def _table_box(self, title: str, table: QTableWidget,
+                   kind: Optional[str] = None) -> QVBoxLayout:
         box = QVBoxLayout()
         lbl = QLabel(title)
         # 결과 섹션 제목 — 강조색 + 본문 폰트보다 +3pt
@@ -891,7 +1093,39 @@ class MainWindow(QMainWindow):
         lbl.setStyleSheet("color: #246B43;")
         box.addWidget(lbl)
         box.addWidget(table)
+
+        # 핵심/확장 라이브러리 소계 — 총합에는 둘 다 포함되지만, 논문에 쓰이는
+        # 핵심 22종 기준 수치를 따로 확인할 수 있도록 분리해 표시한다.
+        if kind is not None:
+            subtotal = QLabel()
+            subtotal.setWordWrap(True)
+            subtotal.setStyleSheet("color: #555;")
+            box.addWidget(subtotal)
+            if kind == "tree":
+                self._tree_subtotal_label = subtotal
+            else:
+                self._shrub_subtotal_label = subtotal
         return box
+
+    def _refresh_subtotals(self, kind: str, entries: List[_Entry]) -> None:
+        """결과 테이블 아래에 핵심/확장 라이브러리 소계를 갱신한다."""
+        label = (self._tree_subtotal_label if kind == "tree"
+                 else self._shrub_subtotal_label)
+        if not entries:
+            label.setText("")
+            return
+        core = sum(e.carbon_kg for e in entries if e.record.is_core)
+        ext = sum(e.carbon_kg for e in entries if e.record.is_extension)
+        core_n = sum(1 for e in entries if e.record.is_core)
+        ext_n = sum(1 for e in entries if e.record.is_extension)
+        if not ext_n:
+            label.setText(tr("핵심 라이브러리 {n}건 · {c:,.2f} kgC")
+                          .format(n=core_n, c=core))
+            return
+        label.setText(
+            tr("핵심 {cn}건 {cc:,.2f} kgC  +  확장 {en}건 {ec:,.2f} kgC  =  {t:,.2f} kgC")
+            .format(cn=core_n, cc=core, en=ext_n, ec=ext, t=core + ext)
+        )
 
     # ----- 동작 -----
 
@@ -948,9 +1182,11 @@ class MainWindow(QMainWindow):
         self._tree_entries = tree_entries
         self._shrub_entries = shrub_entries
 
-        # 결과 테이블
+        # 결과 테이블 + 핵심/확장 소계
         self._populate_table(self.tree_table, [self._entry_to_row(e) for e in tree_entries])
         self._populate_table(self.shrub_table, [self._entry_to_row(e) for e in shrub_entries])
+        self._refresh_subtotals("tree", tree_entries)
+        self._refresh_subtotals("shrub", shrub_entries)
 
         # 게이지 + 숫자
         self.tree_gauge.setValue(total_tree)
@@ -985,6 +1221,8 @@ class MainWindow(QMainWindow):
         # 결과·캐시 비우기
         self.tree_table.setRowCount(0)
         self.shrub_table.setRowCount(0)
+        self._tree_subtotal_label.setText("")
+        self._shrub_subtotal_label.setText("")
         self._tree_entries = []
         self._shrub_entries = []
         self._tree_years = None
@@ -1058,10 +1296,10 @@ class MainWindow(QMainWindow):
         """
         if kind == "tree":
             input_rows = self.tree_rows
-            species_map = self._tree_species
+            records = self._tree_records
         else:
             input_rows = self.shrub_rows
-            species_map = self._shrub_species
+            records = self._shrub_records
         unit = "cm"
 
         entries: List[_Entry] = []
@@ -1069,31 +1307,37 @@ class MainWindow(QMainWindow):
         total_qty = 0
         warnings: List[str] = []
         for input_row in input_rows:
-            species_name, diameter, quantity = input_row.values()
+            species_key, diameter, quantity = input_row.values()
             if quantity <= 0:
                 continue
-            base = species_map.get(species_name)
-            if base is None:
+            record = records.get(species_key)
+            if record is None:
                 continue
-            # 행에 사용자 정의 (a, b, CF) 가 있으면 임시 SpeciesData 구성.
-            override = input_row.override_coeffs()
-            if override is not None:
-                a, b, cf = override
-                species_data = replace(base, a=a, b=b, cf=cf)
-            else:
-                species_data = base
+
+            # core 레코드는 행에 사용자 정의 (a, b, CF) 가 있으면 임시 SpeciesData 구성.
+            species_data = record.species_data
+            if species_data is not None:
+                override = input_row.override_coeffs()
+                if override is not None:
+                    a, b, cf = override
+                    species_data = replace(species_data, a=a, b=b, cf=cf)
+                record = replace(record, species_data=species_data)
+
+            var2 = input_row.var2_value()
             try:
-                row = calculate_carbon(species_name, species_data, diameter, quantity, unit)
-            except RangeViolation as e:
+                lib.check_range(record, diameter)
+                carbon_kg = lib.carbon_total(record, diameter, quantity, var2)
+            except LibraryError as e:
                 warnings.append(str(e))
                 continue
-            if row is not None:
-                total_qty += quantity
-                entries.append(_Entry(
-                    species=species_name, species_data=species_data,
-                    diameter=diameter, quantity=quantity, carbon_kg=row.carbon_kg, unit=unit,
-                ))
-                total += row.carbon_kg
+
+            total_qty += quantity
+            entries.append(_Entry(
+                species=species_key, record=record, species_data=species_data,
+                diameter=diameter, quantity=quantity, carbon_kg=carbon_kg,
+                unit=unit, var2=var2,
+            ))
+            total += carbon_kg
 
         return entries, total, total_qty, warnings
 
@@ -1164,6 +1408,11 @@ class MainWindow(QMainWindow):
                     continue
                 base = species_map.get(species)
                 if base is None:
+                    # 확장 라이브러리 항목 — 성장차·수형 프로필이 없어 3D 에서 제외.
+                    warnings.append(
+                        tr("{species}: 연도별 성장차가 없어 3D 시각화에서 제외됨")
+                        .format(species=species_name(species))
+                    )
                     continue
                 if diameter < base.diameter_min or diameter > base.diameter_max:
                     warnings.append(
@@ -1241,16 +1490,29 @@ class MainWindow(QMainWindow):
         return total
 
     def _build_curves(self, kind: str, entries: List[_Entry]) -> None:
-        """각 항목을 독립적으로 50년 투영해 entry.curve/label 에 채우고 연도축을 캐시."""
+        """각 항목의 곡선과 라벨을 채운다.
+
+        - 연도축(`curve`): 성장차를 가진 core 항목만 50년 투영. 확장 라이브러리
+          항목은 성장차가 없어 None 으로 남고 연도축 그래프에서 제외된다.
+        - 직경축(`d_axis`/`d_curve`): 77종 전부. 유효범위가 있으면 그 구간을,
+          없으면 입력값 주변 구간을 훑는다(`species_library.diameter_axis`).
+        """
         years_ref = None
         for e in entries:
-            years, carbon = project_future_carbon(
-                e.species_data, e.diameter, e.quantity, years=50,
-            )
-            e.curve = carbon
+            if e.supports_year_projection:
+                years, carbon = project_future_carbon(
+                    e.species_data, e.diameter, e.quantity, years=50,
+                )
+                e.curve = carbon
+                years_ref = years
+            else:
+                e.curve = None
+
+            e.d_axis = lib.diameter_axis(e.record, e.diameter)
+            e.d_curve = lib.carbon_by_diameter(e.record, e.d_axis, e.quantity, e.var2)
+
             e.label = tr("{species} ({d:g}{unit}·{n:g}주)").format(
                 species=species_name(e.species), d=e.diameter, unit=e.unit, n=e.quantity)
-            years_ref = years
         if kind == "tree":
             self._tree_years = years_ref
         else:
@@ -1288,32 +1550,73 @@ class MainWindow(QMainWindow):
         else:
             self._shrub_checks, self._shrub_total_cb = checks, total_cb
 
+    def _basis_for(self, kind: str) -> str:
+        return self._tree_basis if kind == "tree" else self._shrub_basis
+
+    def _on_basis_changed(self, kind: str) -> None:
+        """x축 기준 콤보 변경 → 해당 분류의 추정 그래프를 다시 그린다."""
+        combo = self._tree_basis_combo if kind == "tree" else self._shrub_basis_combo
+        basis = combo.currentData() or BASIS_YEAR
+        if kind == "tree":
+            self._tree_basis = basis
+        else:
+            self._shrub_basis = basis
+        self._render_projection(kind)
+
     def _render_projection(self, kind: str) -> None:
-        """범례 체크박스 상태에 따라 추정 그래프를 다시 그린다.
+        """범례 체크박스 상태와 x축 기준에 따라 추정 그래프를 다시 그린다.
 
         - 체크된 각 항목 → 개별 곡선.
         - '총 탄소저장량' 체크 → 전체 항목 합계 곡선(개별 체크와 독립적으로 토글).
         - 아무것도 체크되지 않으면 안내 메시지를 표시.
+
+        연도축은 성장차를 보유한 항목만 그릴 수 있으므로, 확장 라이브러리 항목이
+        섞여 있으면 제외된 개수를 축 옆 안내에 표시한다. 직경축은 전체 항목을
+        그린다.
         """
         if kind == "tree":
-            canvas, entries, years = self.tree_canvas, self._tree_entries, self._tree_years
+            canvas, entries = self.tree_canvas, self._tree_entries
             checks, total_cb, label_kr = self._tree_checks, self._tree_total_cb, tr("교목")
+            years, note = self._tree_years, self._tree_basis_note
         else:
-            canvas, entries, years = self.shrub_canvas, self._shrub_entries, self._shrub_years
+            canvas, entries = self.shrub_canvas, self._shrub_entries
             checks, total_cb, label_kr = self._shrub_checks, self._shrub_total_cb, tr("관목")
+            years, note = self._shrub_years, self._shrub_basis_note
 
-        if years is None or not entries:
+        note.setText("")
+        if not entries:
             canvas.show_message(tr("{kind} 정보 없음").format(kind=label_kr))
             return
 
+        if self._basis_for(kind) == BASIS_DIAMETER:
+            self._render_diameter_projection(kind, canvas, entries, checks, total_cb,
+                                            label_kr, note)
+            return
+
+        # ----- 연도축 (성장차 보유 항목만) -----
+        plottable = [(e, cb) for e, cb in zip(entries, checks)
+                     if e.supports_year_projection]
+        skipped = len(entries) - len(plottable)
+        if skipped:
+            note.setText(tr("성장차 없는 {n}개 항목은 연도별에서 제외 (직경별로 확인)")
+                         .format(n=skipped))
+        if years is None or not plottable:
+            canvas.show_message(
+                tr("연도별 추정이 가능한 항목이 없습니다.\n"
+                   "그래프 기준을 [직경별]로 바꾸면 전체 항목을 볼 수 있습니다."))
+            return
+
         series: list = []
-        for e, cb in zip(entries, checks):
+        for e, cb in plottable:
             if cb.isChecked():
                 series.append((e.label, years, e.curve, False))
 
-        # '총 탄소저장량' = 전체 항목의 연도별 합 (개별 항목 체크 여부와 무관하게 토글).
-        if total_cb is not None and total_cb.isChecked():
-            series.append((tr("총 탄소저장량"), years, self._sum_carbon([e.curve for e in entries]), True))
+        # '총 탄소저장량' = 연도축에 그릴 수 있는 항목의 연도별 합.
+        # 그릴 수 있는 항목이 1개뿐이면 개별 곡선과 같아지므로 합계는 생략한다.
+        if total_cb is not None and total_cb.isChecked() and len(plottable) >= 2:
+            summed = self._sum_carbon([e.curve for e, _cb in plottable])
+            if summed is not None:
+                series.append((tr("총 탄소저장량"), years, summed, True))
 
         if not series:
             canvas.show_message(
@@ -1324,6 +1627,49 @@ class MainWindow(QMainWindow):
         canvas.plot_multi_projection(
             series,
             tr("[{kind}] 향후 50년 탄소저장량 변동 추정").format(kind=label_kr),
+            show_title=False,
+        )
+
+    def _render_diameter_projection(self, kind: str, canvas, entries: List[_Entry],
+                                    checks: List[QCheckBox], total_cb, label_kr: str,
+                                    note: QLabel) -> None:
+        """직경축 추정 그래프 — 77종 전부를 유효범위(또는 입력값 주변)에 걸쳐 표현.
+
+        항목마다 정의역이 다르므로 개별 곡선만 그리고 합계 곡선은 제공하지 않는다
+        (서로 다른 x 격자의 값을 더하면 의미가 없다).
+        """
+        series: list = []
+        unbounded = 0
+        for e, cb in zip(entries, checks):
+            if not cb.isChecked():
+                continue
+            if e.d_axis is None or e.d_curve is None:
+                continue
+            if not e.record.has_range:
+                unbounded += 1
+            series.append((e.label, e.d_axis, e.d_curve, False))
+
+        if not series:
+            canvas.show_message(
+                tr("{kind}: 표시할 항목을 선택하세요 (그래프 위 체크박스)").format(kind=label_kr))
+            return
+
+        notes = []
+        if total_cb is not None and total_cb.isChecked():
+            notes.append(tr("직경별에서는 합계 곡선을 제공하지 않습니다"))
+        if unbounded:
+            notes.append(tr("{n}개 항목은 유효범위 미제공 — 입력값 주변만 표시")
+                         .format(n=unbounded))
+        note.setText(" · ".join(notes))
+
+        predictors = {e.record.predictor_short for e, cb in zip(entries, checks)
+                      if cb.isChecked()}
+        xlabel = (f"{predictors.pop()} (cm)" if len(predictors) == 1
+                  else tr("설명변수"))
+        canvas.plot_multi_projection(
+            series,
+            tr("[{kind}] 직경별 탄소저장량").format(kind=label_kr),
+            xlabel=xlabel,
             show_title=False,
         )
 
@@ -1453,17 +1799,25 @@ class MainWindow(QMainWindow):
                 "species": e.species, "diameter": e.diameter, "quantity": e.quantity,
                 "carbon": e.carbon_kg,
                 "checked": (checks[i].isChecked() if i < len(checks) else True),
-                "a": e.species_data.a, "b": e.species_data.b, "cf": e.species_data.cf,
-                "dmin": e.species_data.diameter_min, "dmax": e.species_data.diameter_max,
+                # 확장 라이브러리 항목은 계수 대신 식 문자열을 보유하므로 a/b/CF 는 None.
+                "a": (e.species_data.a if e.species_data else None),
+                "b": (e.species_data.b if e.species_data else None),
+                "cf": (e.species_data.cf if e.species_data else lib.CARBON_FACTOR),
+                "dmin": e.record.range_min, "dmax": e.record.range_max,
+                "equation": e.record.equation,
+                "source": e.record.source,
             }
             for i, e in enumerate(entries)
         ]
         total_qty = sum(e.quantity for e in entries)
 
         projection = None
-        if years is not None and entries:
-            # 저장 파일에는 '총 탄소저장량'(전체 항목 합)을 기록 — 항목이 2개 이상일 때만.
-            grand = self._sum_carbon([e.curve for e in entries]) if len(entries) >= 2 else None
+        # 연도축 시계열은 성장차를 보유한 항목만 기록한다.
+        year_entries = [(i, e) for i, e in enumerate(entries) if e.curve is not None]
+        if years is not None and year_entries:
+            # 저장 파일에는 '총 탄소저장량'(연도축 항목 합)을 기록 — 2개 이상일 때만.
+            grand = (self._sum_carbon([e.curve for _i, e in year_entries])
+                     if len(year_entries) >= 2 else None)
             projection = {
                 "years": [int(y) for y in years],
                 "series": [
@@ -1472,7 +1826,7 @@ class MainWindow(QMainWindow):
                         "checked": (checks[i].isChecked() if i < len(checks) else True),
                         "carbon": [float(x) for x in e.curve],
                     }
-                    for i, e in enumerate(entries)
+                    for i, e in year_entries
                 ],
                 "total": ([float(x) for x in grand] if grand is not None else None),
             }

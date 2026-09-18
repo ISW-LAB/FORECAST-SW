@@ -13,10 +13,13 @@ Test suite re-verified: 2026-09-11 (Asia/Seoul)
 
 ## Checks performed
 
-1. `python -m unittest discover -s tests -v`: 23 tests passed, including the
+1. `python -m unittest discover -s tests -v`: 32 tests passed, including the
    shared-centimeter DBH/RCD contract, legacy shrub-equation equivalence,
    combined planting-area boundary and over-limit cases, area-normalized
-   carbon density, and normalized-density values exported to XLSX.
+   carbon density, normalized-density values exported to XLSX, and the unified
+   77-record species library (growth-form assignment from the predictor
+   variable, year-basis projection restricted to the 22 records that publish
+   growth increments, and a finite diameter-basis curve for every record).
    The count above is checked by the suite itself: the test
    `test_build_verification_records_the_current_suite_size` discovers the tests
    at run time and fails if this document and the suite disagree, so adding or

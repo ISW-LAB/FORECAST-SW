@@ -54,13 +54,15 @@ Python + PyQt5 for Windows. NumPy (computation), Matplotlib (2D plots), openpyxl
 
 **77 equation records covering 67 distinct scientific names.** Multiple records are retained for a species when source studies differ in geographic origin, stand condition, or biomass component — *Pinus thunbergii*, for example, has **four records**.
 
-| Collection | Records | Predictor | Stored form | Assessment | Scenarios |
+All 77 records are selectable in the site-assessment screen. Each record is filed under the tree or shrub input tab by its **predictor variable** — RCD records are shrubs, the rest are trees — which gives **59 tree** and **18 shrub** records.
+
+| Collection | Records | Predictor | Stored form | Assessment | Graph basis |
 |---|---:|---|---|:---:|:---:|
-| Trees `TREE_BASE` | **7** | DBH (cm) | Coefficients `a, b, CF` + range + increments | ✅ | ✅ |
-| Shrubs `SHRUB_SPECIES` | **15** | RCD (fitted in mm) | Coefficients `a, b, CF` + range + increments | ✅ | ✅ |
-| Domestic `DOMESTIC_SPECIES` | **30** | DBH (+ height, density, LAI) | Expression string + range | — | — |
-| International `FOREIGN_SPECIES` | **25** | DBH (+ height, density, LAI) | Expression string + range | — | — |
-| **Total** | **77** | | | **22** | **22** |
+| Trees `TREE_BASE` | **7** | DBH (cm) | Coefficients `a, b, CF` + range + increments | ✅ | year · diameter |
+| Shrubs `SHRUB_SPECIES` | **15** | RCD (fitted in mm) | Coefficients `a, b, CF` + range + increments | ✅ | year · diameter |
+| Domestic `DOMESTIC_SPECIES` | **30** | DBH · RCD (+ height, density) | Expression string + range | ✅ | diameter |
+| International `FOREIGN_SPECIES` | **25** | DBH · RCD · height (+ height, LAI, length) | Expression string + range | ✅ | diameter |
+| **Total** | **77** | | | **77** | **77 diameter · 22 year** |
 
 #### Table 2. Representative allometric equation records from the FORECAST-SW tree and shrub collections, including predictor definitions, fitted diameter ranges, and period-specific growth increments
 
@@ -83,6 +85,15 @@ Python + PyQt5 for Windows. NumPy (computation), Matplotlib (2D plots), openpyxl
 - `X` = DBH for trees, RCD for shrubs, in cm. Shrub equations fitted in mm are written as **`10X`**, with fitted limits converted to cm — the original relationship is preserved without refitting.
 - Site category is **descriptive metadata**; it does not select or modify coefficients (`test_site_category_does_not_select_coefficients`).
 - Full inventory: [`species_data.json`](species_data.json).
+
+#### Graph bases
+
+The estimation panel plots carbon stock against either axis, selected per tab:
+
+- **By year** — the 50-year scenario. It requires published annual diameter increments, so it covers the **22** core records; entries from the other 55 are listed as omitted with a pointer to the diameter basis. No growth rate is substituted for a record that does not publish one.
+- **By diameter** — carbon across the predictor axis, available for **all 77** records. Each curve spans that record's fitted range; the **20** records whose sources publish no domain are swept over a band around the entered value and flagged as such. Curves are not summed on this basis because records have different domains.
+
+Records from the extension collections contribute to the site totals, the planting-area guard (whose per-individual areas are defined per growth form, not per species), and the Excel export. Each result table also reports the core and extension subtotals separately, so the 22-record figures remain readable. The 3D view still covers only the 22 core records, since it needs the growth increments.
 
 ---
 
@@ -115,7 +126,7 @@ v_i(t) = 1 if D_min,i ≤ D_i(t) ≤ D_max,i, else 0                       … E
 - `q_i` belongs to the equation record, so overrides (`a_i`, `b_i`, `CF_i`) never change it.
 - Eq. (3): total stock is **independent of site area**; density varies **inversely** with it.
 - Eq. (5) runs **after** calculation and only flags extrapolation — it never alters trajectories.
-- Domestic/international records use `Y_i = f_i(X_i, H_i)` via an AST allowlist (no Python `eval`). Storing no carbon fraction or increments, they apply a fixed **CF₀ = 0.5** and are excluded from scenarios.
+- Domestic/international records use `Y_i = f_i(X_i, H_i)` via an AST allowlist (no Python `eval`). Storing no carbon fraction or increments, they apply a fixed **CF₀ = 0.5** and are excluded from the year-based scenario — they are plotted on the diameter basis instead.
 
 ---
 
@@ -291,6 +302,7 @@ python -m unittest discover -s tests -v
 │   ├── input_limits.py                planting-area safeguard — Eq. (2), stage 5
 │   ├── equation_eval.py               expression evaluation (AST allowlist)
 │   ├── data.py / data2.py             coefficients and equations (JSON-load fallback)
+│   ├── species_library.py             unified 77-record view (growth form, graph bases)
 │   ├── main_window.py                 site assessment — Figure 3, stages 4–7
 │   ├── combined_window.py             integrated window, per-site tabs — Figure 4
 │   ├── tree_simulation/               3D growth visualization — Figure 5
