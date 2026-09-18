@@ -1,19 +1,19 @@
 # FORECAST-SW
 
-The current UI provides nine tabs: yearly projection/contribution and diameter projection/contribution for trees and shrubs, plus 3D visualization. A shared year bar synchronizes years 0–30. Records without growth increments use an assumed 2% annual predictor increase; see [growth assumptions](GROWTH_ASSUMPTIONS.md). Paper figures below show the earlier UI.
-
 **Carbon-stock assessment and growth scenario analysis for forest restoration plantings**
 
 **English** · [한국어](README.ko.md)
 
-Official v1.0 release evaluated in the SoftwareX article of the same title. Figures and tables below are those reported in the article.
+FORECAST-SW is an open-source Windows desktop application for assessing live biomass carbon stocks in mixed tree and shrub inventories at forest restoration sites. It combines allometric-equation management, unit-consistent calculation, cross-site comparison, deterministic growth scenarios over a **30-year horizon**, 3D visualization, and XLSX reporting.
 
-#### Table 1. Code metadata
+This README describes FORECAST-SW v1.0 and follows the accompanying manuscript. Figure numbers and Tables 1–3 match the manuscript; installation, build, and repository guidance is provided below.
+
+#### Code metadata
 
 | Nr | Description | Value |
 |:---:|---|---|
 | C1 | Current code version | FORECAST-SW v1.0 |
-| C2 | Permanent link to code repository | https://github.com/ISW-LAB/-SEJONG-SW/tree/v1.0 |
+| C2 | Permanent link to code repository | [FORECAST-SW repository](https://github.com/ISW-LAB/FORECAST-SW) |
 | C3 | Permanent link to Reproducible Capsule | Not applicable |
 | C4 | Legal Code License | [MIT](LICENSE); [KOGL Type 1](DATA_LICENSE.md) for `species_data.json` |
 | C5 | Code versioning system used | Git |
@@ -25,7 +25,7 @@ Official v1.0 release evaluated in the SoftwareX article of the same title. Figu
 [1. Architecture](#1-architecture-and-workflow) · [2. Equation library](#2-equation-library) · [3. Calculation](#3-calculation) · [4. Illustrative examples](#4-illustrative-examples) · [5. Install](#5-install-and-run) · [6. Edit & deploy](#6-edit-and-deploy-the-equation-library) · [7. Build](#7-build) · [8. Tests](#8-tests) · [9. Layout](#9-repository-layout) · [10. Citation](#10-citation) · [11. License](#11-license)
 
 > [!IMPORTANT]
-> **Scope.** Allometric equations define diameter–biomass relationships; diameter development is prescribed separately through annual increments. Trajectories are therefore **deterministic outcomes under the specified growth assumptions** — not validated predictions. Estimates beyond the fitted diameter range are **extrapolations**. Planting-area footprints and 3D geometry are software-defined settings, not ecological carrying capacity or measured plant architecture.
+> **Scope.** Allometric equations define diameter–biomass relationships; diameter development is prescribed separately through annual increments. Trajectories are therefore **deterministic outcomes under the specified growth assumptions** — not validated predictions. Estimates beyond the fitted diameter range are **extrapolations**. Scenarios assume that all planted individuals survive throughout the projection horizon. Planting-area footprints and 3D geometry are software-defined settings, not ecological carrying capacity, appropriate planting density, or measured plant architecture. Confirm that the response variable, biomass component, predictor units, and measurement protocol match the intended assessment context.
 
 ---
 
@@ -54,7 +54,7 @@ Python + PyQt5 for Windows. NumPy (computation), Matplotlib (2D plots), openpyxl
 
 ## 2. Equation library
 
-**77 equation records covering 67 distinct scientific names.** Multiple records are retained for a species when source studies differ in geographic origin, stand condition, or biomass component — *Pinus thunbergii*, for example, has **four records**.
+**77 equation records covering 67 distinct scientific names.** The primary tree and shrub collections contain 22 equations developed by the research team from direct biomass measurements at restoration sites in South Korea; the domestic and international collections contain 55 equations compiled from published studies. Multiple records are retained for a species when source studies differ in geographic origin, stand condition, or biomass component — *Pinus thunbergii*, for example, has **four records**.
 
 All 77 records are selectable in the site-assessment screen. Each record is filed under the tree or shrub input tab by its **predictor variable** — RCD records are shrubs, the rest are trees — which gives **59 tree** and **18 shrub** records.
 
@@ -66,24 +66,26 @@ All 77 records are selectable in the site-assessment screen. Each record is file
 | International `FOREIGN_SPECIES` | **25** | DBH · RCD · height (+ height, LAI, length) | Expression string + range | ✅ | diameter |
 | **Total** | **77** | | | **77** | **77 diameter · 22 year** |
 
-#### Table 2. Representative allometric equation records from the FORECAST-SW tree and shrub collections, including predictor definitions, fitted diameter ranges, and period-specific growth increments
+#### Table 1. Representative allometric equation records from the FORECAST-SW tree and shrub collections, including predictor definitions, fitted diameter ranges, and period-specific growth increments
 
-| Scientific name | Allometric equation | Predictor | Fitted range | 1–10 | 11–20 | 21–30 |
-|---|---|:---:|:---:|---:|---:|---:|
-| ***Tree collection*** | | | | | | |
-| *Pinus densiflora* | `Y = 0.0737·X^2.5735` | DBH | 1–15 cm | 0.11 | 0.20 | 0.70 |
-| *Pinus thunbergii* | `Y = 0.0679·X^2.5770` | DBH | 1–29 cm | 0.24 | 0.32 | 0.32 |
-| *Chamaecyparis obtusa* | `Y = 0.3617·X^2.0450` | DBH | 1–50 cm | 0.11 | 0.23 | 0.23 |
-| *Quercus serrata* | `Y = 0.2002·X^2.3767` | DBH | 1–30 cm | 0.13 | 0.30 | 0.30 |
-| *Quercus mongolica* | `Y = 0.0147·X^3.1075` | DBH | 6–30 cm | 0.40 | 0.40 | 0.40 |
-| ***Shrub collection*** | | | | | | |
-| *Euonymus japonicus* | `Y = 0.0002·(10X)^2.5` | RCD | 0.6–5.3 cm | 0.30 | 0.22 | 0.22 |
-| *Rhododendron yedoense* f. *poukhanense* | `Y = 0.0003·(10X)^2.4` | RCD | 0.1–2.2 cm | 0.31 | 0.17 | 0.17 |
-| *Euonymus alatus* | `Y = 0.000022·(10X)^2.55` | RCD | 1.1–6.7 cm | 0.38 | 0.25 | 0.25 |
-| *Viburnum erosum* | `Y = 0.00026·(10X)^2.5` | RCD | 0.7–3.9 cm | 0.35 | 0.00 | 0.00 |
-| *Weigela subsessilis* | `Y = 0.00029·(10X)^2.4` | RCD | 0.6–3.9 cm | 0.30 | 0.24 | 0.24 |
+| Scientific name | Allometric equation | Predictor | Fitted range | 1–10 | 11–20 | 21–30 | Reference |
+|---|---|:---:|:---:|---:|---:|---:|---|
+| ***Tree collection*** | | | | | | | |
+| *Pinus densiflora* | `Y = 0.0737·X^2.5735` | DBH | 1–15 cm | 0.11 | 0.20 | 0.70 | [23](#ref-23), [24](#ref-24) |
+| *Pinus thunbergii* | `Y = 0.0679·X^2.5770` | DBH | 1–29 cm | 0.24 | 0.32 | 0.32 | [23](#ref-23), [25](#ref-25) |
+| *Chamaecyparis obtusa* | `Y = 0.3617·X^2.0450` | DBH | 1–50 cm | 0.11 | 0.23 | 0.23 | [23](#ref-23), [25](#ref-25) |
+| *Quercus serrata* | `Y = 0.2002·X^2.3767` | DBH | 1–30 cm | 0.13 | 0.30 | 0.30 | [23](#ref-23), [25](#ref-25) |
+| *Quercus mongolica* | `Y = 0.0147·X^3.1075` | DBH | 6–30 cm | 0.40 | 0.40 | 0.40 | [24](#ref-24), [25](#ref-25) |
+| ***Shrub collection*** | | | | | | | |
+| *Euonymus japonicus* | `Y = 0.0002·(10X)^2.5` | RCD | 0.6–5.3 cm | 0.30 | 0.22 | 0.22 | [26](#ref-26) |
+| *Rhododendron yedoense* | `Y = 0.0003·(10X)^2.4` | RCD | 0.1–2.2 cm | 0.31 | 0.17 | 0.17 | [26](#ref-26) |
+| *Euonymus alatus* | `Y = 0.000022·(10X)^2.55` | RCD | 1.1–6.7 cm | 0.38 | 0.25 | 0.25 | [26](#ref-26) |
+| *Lespedeza bicolor* | `Y = 0.00015·(10X)^2.8` | RCD | 0.2–1.7 cm | 0.10 | 0.06 | 0.06 | [23](#ref-23) |
+| *Weigela subsessilis* | `Y = 0.00029·(10X)^2.4` | RCD | 0.6–3.9 cm | 0.30 | 0.24 | 0.24 | [27](#ref-27) |
 
-- Last three columns: annual diameter increment (cm yr⁻¹). **Zero = no prescribed growth** in that period.
+References identify the equation sources listed in the supporting reports and equation database, following the manuscript. Bibliographic details appear in [Equation sources](#equation-sources). The growth-increment columns are separate parameters; the reference mapping follows the manuscript's equation-source attribution.
+
+- Columns 1–10, 11–20, and 21–30: annual diameter increment (cm yr⁻¹). **Zero = no prescribed growth** in that period.
 - `X` = DBH for trees, RCD for shrubs, in cm. Shrub equations fitted in mm are written as **`10X`**, with fitted limits converted to cm — the original relationship is preserved without refitting.
 - **Every species stores one record per site category**, and the application applies exactly the record for the selected category — there is no category-independent base equation (`SiteCategoryTests`). All four collections use the same `by_env` shape, keyed by the three categories.
 - Records that the sources actually differentiate carry different values: *Pinus densiflora* uses sheet rows 1 / 2 / 3 for the three categories. Every other species is initialized identically across the three and can be differentiated in the Manager as evidence becomes available.
@@ -94,10 +96,10 @@ All 77 records are selectable in the site-assessment screen. Each record is file
 
 The estimation panel plots carbon stock against either axis, selected per tab:
 
-- **By year** — the 30-year scenario. All **77** records are included: 22 use stored increments and 55 use the explicitly assumed 2% annual predictor increase.
+- **By year** — the 0–30-year deterministic scenario for the **22 primary tree and shrub records**, using stored period-specific diameter increments. The 55 domestic and international records have no stored increments and are excluded from the deterministic growth analysis described in the manuscript.
 - **By diameter** — carbon across the predictor axis, available for **all 77** records. Each curve spans that record's fitted range; the **20** records whose sources publish no domain are swept over a band around the entered value and flagged as such. Curves are not summed on this basis because records have different domains.
 
-Records from the extension collections contribute to the site totals, the planting-area guard (whose per-individual areas are defined per growth form, not per species), and the Excel export. Each result table also reports the core and extension subtotals separately, so the 22-record figures remain readable. The 3D view includes all 77 records, using the same stored or assumed growth as the yearly graphs.
+Records from the extension collections contribute to the site totals, the planting-area guard (whose per-individual areas are defined per growth form, not per species), and the Excel export. Each result table also reports the core and extension subtotals separately, so the 22-record figures remain readable. The manuscript's 3D growth examples use the same prescribed diameter increments as the primary year-based scenarios.
 
 ---
 
@@ -130,7 +132,7 @@ v_i(t) = 1 if D_min,i ≤ D_i(t) ≤ D_max,i, else 0                       … E
 - `q_i` belongs to the equation record, so overrides (`a_i`, `b_i`, `CF_i`) never change it.
 - Eq. (3): total stock is **independent of site area**; density varies **inversely** with it.
 - Eq. (5) runs **after** calculation and only flags extrapolation — it never alters trajectories.
-- Domestic/international records use `Y_i = f_i(X_i, H_i)` via an AST allowlist (no Python `eval`). Storing no carbon fraction or increments, they apply a fixed **CF₀ = 0.5** and use X(t) = X(0) × 1.02^t for the assumed year-based scenario, holding H fixed. Diameter-basis graphs remain available.
+- Domestic/international records use `Y_i = f_i(X_i, H_i)` via an AST allowlist (no Python `eval`). Storing no carbon fraction or increments, they apply a fixed **CF₀ = 0.5** and are excluded from the deterministic growth scenario analysis described in the manuscript. Diameter-basis graphs remain available.
 
 ---
 
@@ -146,7 +148,7 @@ These examples illustrate **software behavior under the tested settings**, not a
 
 > **Figure 2.** Equation-library management in FORECAST-SW, including record configuration, parameter editing, and deployment of the validated library.
 
-The manager window shows the four collections with an editable record table exposing coefficients, carbon fractions, fitted limits, and growth rates as individual columns.
+The manager maintains records from four collections. Figure 2 shows the interface organized by restoration-site category, with tree and shrub subtabs and editable columns for coefficients, carbon fractions, fitted limits, and growth increments.
 
 **(a)** add a record · **(b)** remove a record · **(c)** modify regression coefficients · **(d)** deploy the validated JSON — by rebuilding the application or applying it to an existing installation.
 
@@ -160,13 +162,13 @@ The manager window shows the four collections with an editable record table expo
 
 Profile 1 — three tree and two shrub species on a 20 m × 20 m site.
 
-**(a)** main workspace: inventory entry with current tree, shrub, and total stocks · **(b)** equation dialog: resolved equation, coefficients, carbon fraction, fitted range, increments · **(c)** 0–50-year trajectory and species contributions · **(d)** 3D stand configuration.
+The upper overview shows the main workspace, including inventory entry and tree, shrub, and total carbon stocks at the selected scenario year. The labeled panels show **(a)** the tree/shrub entry dialog with the resolved equation, coefficients, carbon fraction, fitted range, and increments; **(b)** the 0–30-year carbon-stock trajectory and species contributions; and **(c)** the 3D stand visualization. A shared year bar synchronizes the scenario views over years 0–30.
 
 ### 4.3 Area-aware cross-site comparison
 
 Designed to separate variation from **inventory composition** from that introduced by **area normalization**.
 
-#### Table 3. Controlled inventories and outputs for the cross-site comparisons in Figure 4
+#### Table 2. Controlled inventories and outputs for the cross-site comparisons in Figure 4
 
 | Comparison | Profile | Site area (m²) | Tree records | Shrub records | Stock (kg C) | Density (kg C m⁻²) |
 |---|:---:|:---:|---|---|---:|---:|
@@ -194,21 +196,20 @@ Designed to separate variation from **inventory composition** from that introduc
   <img src="figures/paper/fig5_growth_scenario.png" alt="Deterministic growth scenario for Profile 1" width="100%">
 </p>
 
-The software now displays years 0–30 in graphs and 3D visualization. Figure 5 and its table below retain the original 50-year scenario as a paper example.
+The scenario illustrates how prescribed diameter increments translate into changes in carbon stock. For Profile 1, total stock increases from **198.89 kg C at year 0** to **3,444.50 kg C at year 30**.
 
-> **Figure 5.** Deterministic growth scenario for Profile 1 at years 0, 20, and 50, showing tree, shrub, and total carbon stocks together with the corresponding 3D stand visualization.
+> **Figure 5.** Deterministic growth scenario for Profile 1 at **(a) year 0** and **(b) year 30**, showing tree, shrub, and total carbon stocks together with the corresponding 3D stand visualizations.
 
 | Year | Trees (kg C) | Shrubs (kg C) | **Total (kg C)** |
 |:---:|---:|---:|---:|
 | 0 | 194.15 | 4.74 | **198.89** |
-| 20 | 1,155.21 | 204.97 | **1,360.18** |
-| 50 | 11,686.10 | 1,008.04 | **12,694.14** |
+| 30 | 3,050.16 | 394.34 | **3,444.50** |
 
-Later values may include **extrapolated estimates** where projected diameters exceed the fitted ranges. The 3D views are software-defined scenario geometry, not measured plant architecture.
+Year-30 values may include **extrapolated estimates** where projected diameters exceed the fitted ranges. The 3D views are software-defined scenario geometry, not measured plant architecture.
 
 ### 4.5 Two-level record validation and planting-area safeguard
 
-#### Table 4. Test cases and outcomes for diameter-range validation and the planting-area safeguard
+#### Table 3. Test cases and outcomes for diameter-range validation and the planting-area safeguard
 
 | Check | Test case | Criterion | Outcome |
 |---|---|---|---|
@@ -297,7 +298,7 @@ python build_updater.py              # Equation Library Manager (or build_librar
 python -m unittest discover -s tests -v
 ```
 
-22 regression tests reproduce Tables 3–4 and Figures 4–5: library record counts, area-normalized densities (`0.4972 / 0.3978 / 0.3315`), proportional scaling with represented count, diameter boundaries, scenario repeatability and year-zero agreement, shrub mm↔cm equivalence, execution of all 55 compatibility equations, and rejection of unsafe syntax. The same suite runs in CI on Windows with Python 3.10 and 3.11. Build environment and checksums: [BUILD_VERIFICATION.md](BUILD_VERIFICATION.md).
+22 regression tests reproduce Tables 2–3 and Figures 4–5: library record counts, area-normalized densities (`0.4972 / 0.3978 / 0.3315`), proportional scaling with represented count, diameter boundaries, scenario repeatability and year-zero agreement, shrub mm↔cm equivalence, execution of all 55 compatibility equations, and rejection of unsafe syntax. The same suite runs in CI on Windows with Python 3.10 and 3.11. Build environment and checksums: [BUILD_VERIFICATION.md](BUILD_VERIFICATION.md).
 
 ---
 
@@ -305,7 +306,7 @@ python -m unittest discover -s tests -v
 
 ```
 ├── main.py                        ← entry point
-├── species_data.json              ← equation library (77 records) — Table 2
+├── species_data.json              ← equation library (77 records) — Table 1
 ├── translations_ko_en.json        ← UI Korean→English strings (JSON override, no rebuild)
 ├── build_exe.py / build_updater.py / build_library_manager.bat
 ├── updater_app.py                 ← Equation Library Manager — Figure 2, stages 1–3
@@ -323,8 +324,8 @@ python -m unittest discover -s tests -v
 │   ├── main_window2.py                domestic/international screen (not exposed in v1.0)
 │   ├── plotting.py / widgets.py / i18n.py / translations.py
 │   └── theme.py / font_config.py / ui_scale.py
-├── tests/test_core.py             ← 22 regression tests — Tables 3–4
-└── figures/paper/                 ← Figures 1–6 as published
+├── tests/test_core.py             ← 22 regression tests — Tables 2–3
+└── figures/paper/                 ← Figures 1–6 from the accompanying manuscript
 ```
 
 **Troubleshooting** — missing PyQt5: `pip install -r requirements.txt` · PyInstaller build error: `--rebuild-venv` · exe exits at launch: rebuild with `--debug` and read the console · broken Korean glyphs: install "Malgun Gothic" · text too large/small: adjust `FONT_SIZE_DELTA` in `carbon_calculator\font_config.py`.
@@ -333,10 +334,20 @@ python -m unittest discover -s tests -v
 
 ## 10. Citation
 
-> Jeong, K., Jo, G., Kim, J., Kim, H.-K., Kim, C.-B., & Lee, E.
-> *FORECAST-SW: Carbon-stock assessment and growth scenario analysis for forest restoration plantings.* SoftwareX.
+> Jeong, K., Jo, G., Kim, J., Kim, H.-K., Kim, C.-B., Park, K. H., Im, S., & Lee, E.
+> *FORECAST-SW: Carbon-stock assessment and growth scenario analysis for forest restoration plantings.* Accompanying manuscript.
 
 Machine-readable metadata: [`CITATION.cff`](CITATION.cff). **When using an individual allometric equation, also cite its original source publication.**
+
+### Equation sources
+
+Reference numbers match Table 1 and the bibliography of the accompanying manuscript.
+
+- <a id="ref-23"></a>**[23]** National Institute of Forest Science (2024). *Development of allometric equations for young trees.* Contract research report.
+- <a id="ref-24"></a>**[24]** National Institute of Forest Science (2023). *Biomass measurement and development of allometric equations for oaks in forest restoration sites.* Research report.
+- <a id="ref-25"></a>**[25]** Korea Forest Research Institute (2014). *Carbon emission factors and biomass allometric equations for major tree species in Korea.* Research report.
+- <a id="ref-26"></a>**[26]** Korea Arboreta and Gardens Institute (2022). *Establishing a foundation for enhancing urban biodiversity.* Research report.
+- <a id="ref-27"></a>**[27]** Korea Arboreta and Gardens Institute (2023). *Research on enhancing biodiversity in urban forests.* Research report.
 
 **Contact**: [kc.jeong-isw@cbnu.ac.kr](mailto:kc.jeong-isw@cbnu.ac.kr) · [gc.jo-isw@cbnu.ac.kr](mailto:gc.jo-isw@cbnu.ac.kr)
 
@@ -353,4 +364,4 @@ Individual allometric equations must retain the bibliographic information of the
 
 ---
 
-<sub>Supported by IPET (RS-2024-00398561, MAFRA), IITP (IITP-2026-RS-2020-II201462, MSIT), and NRF (RS-2025-25430681, Ministry of Education), Republic of Korea.</sub>
+<sub>Supported by IPET (RS-2024-00398561, MAFRA), IITP (IITP-2026-RS-2020-II201462, MSIT), NRF (RS-2025-25430681, Ministry of Education), and NIFoS (FE0100-2022-01-2026), Republic of Korea.</sub>
