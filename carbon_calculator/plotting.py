@@ -20,18 +20,22 @@ from matplotlib.figure import Figure  # noqa: E402
 
 from PyQt5.QtWidgets import QSizePolicy  # noqa: E402
 
-from .i18n import species_name, tr  # noqa: E402
+from .i18n import get_language, species_name, tr  # noqa: E402
+from .typography import (  # noqa: E402
+    PLOT_ANNOTATION_PT, PLOT_BODY_PT, PLOT_LABEL_PT, PLOT_LEGEND_PT,
+    PLOT_MESSAGE_PT, PLOT_TICK_PT, PLOT_TITLE_PT, font_family, scaled_point_size,
+)
 
 
 # 기준 해상도(1920×1080, scale=1.0)에서의 matplotlib 폰트 크기.
 # set_plot_font_scale 로 화면 스케일을 곱해 작은 모니터에서 비례 축소한다.
 _BASE_PLOT_FONTS = {
-    "font.size": 18,
-    "axes.titlesize": 20,
-    "axes.labelsize": 18,
-    "xtick.labelsize": 16,
-    "ytick.labelsize": 16,
-    "legend.fontsize": 16,
+    "font.size": PLOT_BODY_PT,
+    "axes.titlesize": PLOT_TITLE_PT,
+    "axes.labelsize": PLOT_LABEL_PT,
+    "xtick.labelsize": PLOT_TICK_PT,
+    "ytick.labelsize": PLOT_TICK_PT,
+    "legend.fontsize": PLOT_LEGEND_PT,
 }
 
 # 인라인 fontsize(파이/메시지/툴팁)에도 적용할 현재 스케일.
@@ -43,17 +47,18 @@ def set_plot_font_scale(scale: float = 1.0) -> None:
     global _PLOT_SCALE
     _PLOT_SCALE = scale
     try:
-        plt.rcParams["font.family"] = "Malgun Gothic"
+        plt.rcParams["font.family"] = [font_family(get_language()), "Malgun Gothic", "DejaVu Sans"]
+        plt.rcParams["mathtext.fontset"] = "dejavusans"
         plt.rcParams["axes.unicode_minus"] = False
         for key, base in _BASE_PLOT_FONTS.items():
-            plt.rcParams[key] = max(7, round(base * scale))
+            plt.rcParams[key] = scaled_point_size(base, scale)
     except Exception:
         pass
 
 
 def _fs(base: float) -> int:
     """인라인 fontsize 를 현재 스케일로 변환."""
-    return max(6, round(base * _PLOT_SCALE))
+    return scaled_point_size(base, _PLOT_SCALE)
 
 
 # 기본(scale=1.0) 설정 — run 진입점에서 set_plot_font_scale 로 재설정됨.
@@ -82,6 +87,83 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
         self._hover_xlabel: str = "x"
         self._hover_ylabel: str = "y"
 
+    # 설계 기준 패널 크기(px). 이보다 좁거나 낮은 패널에서는 축 글자를 비례 축소해
+    # 그림 영역을 지킨다 (절대 확대하지는 않는다).
+    _PANEL_REF_W = 900.0
+    _PANEL_REF_H = 430.0
+    _PANEL_MIN_SCALE = 0.72
+
+    def _panel_scale(self) -> float:
+        """캔버스가 설계 기준보다 작으면 1 미만의 배수를 돌려준다."""
+        try:
+            w, h = self.figure.bbox.width, self.figure.bbox.height
+        except Exception:  # noqa: BLE001
+            return 1.0
+        if w <= 0 or h <= 0:
+            return 1.0
+        fit = min(w / self._PANEL_REF_W, h / self._PANEL_REF_H)
+        return max(self._PANEL_MIN_SCALE, min(1.0, fit))
+
+    def _fit_axes_text(self) -> None:
+        """좁은 패널에서 축 제목·눈금·범례가 그림 영역을 잠식하지 않게 맞춘다.
+
+        글자를 키우면 큰 창·내보낸 이미지에서는 잘 읽히지만, 앱 안의 낮은 그래프
+        패널에서는 축 라벨이 그림을 밀어내고 잘리기까지 한다. 캔버스 실제 크기에
+        맞춰 축 글자만 비례 축소한다(데이터 라벨·제목 크기 기준은 그대로).
+        """
+        scale = self._panel_scale()
+        if scale >= 0.999:
+            return
+        try:
+            ax = self.ax
+            label_pt = scaled_point_size(PLOT_LABEL_PT, _PLOT_SCALE * scale)
+            ax.xaxis.label.set_fontsize(label_pt)
+            ax.yaxis.label.set_fontsize(label_pt)
+            ax.title.set_fontsize(scaled_point_size(PLOT_TITLE_PT, _PLOT_SCALE * scale))
+            ax.tick_params(axis="both",
+                           labelsize=scaled_point_size(PLOT_TICK_PT, _PLOT_SCALE * scale))
+            legend = ax.get_legend()
+            if legend is not None:
+                legend_pt = scaled_point_size(PLOT_LEGEND_PT, _PLOT_SCALE * scale)
+                for text in legend.get_texts():
+                    text.set_fontsize(legend_pt)
+                if legend.get_title() is not None:
+                    legend.get_title().set_fontsize(legend_pt)
+        except Exception:  # noqa: BLE001 — 조정 실패 시 기본 크기 유지
+            pass
+        self._fit_axis_labels()
+
+    def _fit_axis_labels(self) -> None:
+        """긴 축 제목이 캔버스를 넘치면 들어갈 크기까지 줄인다.
+
+        'Area-normalized carbon density (kg C/m²)' 처럼 긴 y축 제목은 낮은 패널에서
+        세로로 잘린다. 비례 축소만으로는 모자라므로 실제 길이를 재서 맞춘다.
+        """
+        try:
+            self.figure.draw_without_rendering()
+            limits = ((self.ax.yaxis.label, self.figure.bbox.height),
+                      (self.ax.xaxis.label, self.figure.bbox.width))
+            changed = False
+            for label, room in limits:
+                if not label.get_text() or room <= 0:
+                    continue
+                box = label.get_window_extent()
+                length = box.height if label is self.ax.yaxis.label else box.width
+                if length <= room * 0.98:
+                    continue
+                floor = _fs(PLOT_ANNOTATION_PT)
+                shrunk = max(floor, label.get_fontsize() * (room * 0.95) / length)
+                label.set_fontsize(shrunk)
+                changed = True
+            if changed:
+                self.figure.draw_without_rendering()
+        except Exception:  # noqa: BLE001 — 측정 실패 시 원래 크기 유지
+            pass
+
+    def resizeEvent(self, event):   # noqa: N802 — Qt 시그니처
+        super().resizeEvent(event)
+        self._fit_axes_text()
+
     def _teardown_hover(self) -> None:
         if self._hover_cid is not None:
             try:
@@ -97,6 +179,34 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
         self.ax.clear()
         self.draw_idle()
 
+    def _set_title(self, title: str, **kwargs) -> None:
+        self.ax.set_title(title, **kwargs)
+
+    def _fit_title(self) -> None:
+        """제목이 캔버스를 벗어나면 들어갈 크기까지 줄인다.
+
+        범례를 축 바깥에 두면 축이 좁아져, 가운데 정렬된 제목이 캔버스 왼쪽으로
+        삐져나갈 수 있다. 글자를 키운 뒤 특히 두드러지므로 범례까지 배치한 뒤
+        실제 폭을 재서 맞춘다.
+        """
+        text = self.ax.title
+        if not text.get_text():
+            return
+        try:
+            self.figure.draw_without_rendering()
+            fig_w = self.figure.bbox.width
+            bb = text.get_window_extent()
+            if bb.width <= 0 or fig_w <= 0:
+                return
+            cx = 0.5 * (bb.x0 + bb.x1)
+            half_avail = min(cx, fig_w - cx) * 0.92   # 캔버스 가장자리 여유
+            scale = half_avail / (bb.width / 2.0)
+            if scale < 1.0:
+                floor = _fs(PLOT_ANNOTATION_PT)
+                text.set_fontsize(max(floor, text.get_fontsize() * scale))
+        except Exception:  # noqa: BLE001 — 측정 실패 시 원래 크기 유지
+            pass
+
     def plot_projection(self, years, carbon, title: str, ylabel: str | None = None,
                         xlabel: str | None = None) -> None:
         # 기본값을 import 시점에 굳히면 언어 설정 전 문자열이 박힌다 → 호출 시 해석.
@@ -109,11 +219,13 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
             linewidth=2.0, markersize=5, picker=False,
         )
         line.set_pickradius(6)
-        self.ax.set_title(title)
+        self._set_title(title)
         self.ax.set_xlabel(xlabel)
         self.ax.set_ylabel(ylabel)
         self.ax.grid(True, alpha=0.4)
         self._install_hover([(line, list(years), list(carbon), "")], xlabel, ylabel)
+        self._fit_axes_text()
+        self._fit_title()
         self.draw_idle()
 
     def plot_multi_projection(self, series, title: str,
@@ -157,7 +269,7 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
             specs.append((line, list(years), list(carbon), label))
 
         if show_title:
-            self.ax.set_title(title)
+            self._set_title(title)
         self.ax.set_xlabel(xlabel)
         self.ax.set_ylabel(ylabel)
         self.ax.grid(True, alpha=0.4)
@@ -165,17 +277,19 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
         # 가로 자리를 확보). 항목이 많으면 세로로 넘쳐 잘리므로 열 수를 늘려 옆으로 펼친다.
         ncol = 1 + (len(specs) - 1) // 10  # 한 열에 ~10개씩 → 16개 이상이면 2열+
         self.ax.legend(
-            fontsize=_fs(10), loc="upper left", bbox_to_anchor=(1.01, 1.0),
+            fontsize=_fs(PLOT_LEGEND_PT), loc="upper left", bbox_to_anchor=(1.01, 1.0),
             framealpha=0.95, borderaxespad=0.0, ncol=max(1, ncol),
         )
         self._install_hover(specs, xlabel, ylabel)
+        self._fit_axes_text()
+        self._fit_title()
         self.draw_idle()
 
     def show_message(self, message: str) -> None:
         self._teardown_hover()
         self.ax.clear()
         self.ax.text(0.5, 0.5, message, ha="center", va="center",
-                     transform=self.ax.transAxes, fontsize=_fs(15), color="#777")
+                     transform=self.ax.transAxes, fontsize=_fs(PLOT_MESSAGE_PT), color="#777")
         self.ax.set_xticks([])
         self.ax.set_yticks([])
         self.draw_idle()
@@ -193,7 +307,7 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
             "", xy=(0, 0), xytext=(15, 15), textcoords="offset points",
             bbox=dict(boxstyle="round,pad=0.4", fc="#FFFFE0", ec="#888", alpha=0.95),
             arrowprops=dict(arrowstyle="->", color="#888"),
-            fontsize=_fs(13),
+            fontsize=_fs(PLOT_ANNOTATION_PT),
             # 모든 곡선(총합 곡선 zorder=5 포함)·마커 위에 항상 표시되도록 zorder 를 크게.
             zorder=100,
         )
@@ -287,7 +401,7 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
 
     def plot_pie(self, labels: list[str], values: list[float],
                  title: str | None = None, top_n: int = 5,
-                 label_fs: float = 17, title_fs: float = 20,
+                 label_fs: float = PLOT_LEGEND_PT, title_fs: float = PLOT_TITLE_PT,
                  show_title: bool = True) -> None:
         """
         Carbon2 의 plotCarbonPieChart 와 동등.
@@ -325,15 +439,88 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
             for lbl, val in zip(plot_labels, plot_values)
         ]
 
-        self.ax.pie(
+        _wedges, texts = self.ax.pie(
             plot_values, labels=full_labels,
             startangle=90, counterclock=False,
+            radius=0.72,
             wedgeprops={"linewidth": 0.6, "edgecolor": "white"},
             textprops={"fontsize": _fs(label_fs)},
         )
+        # 얇은 조각들은 라벨이 같은 방향에 몰려 겹친다 → 반지름 방향으로 번갈아 밀어낸다.
+        thin = [i for i, v in enumerate(plot_values) if total > 0 and v / total < 0.08]
+        for rank, i in enumerate(thin):
+            x, y = texts[i].get_position()
+            push = 1.14 + 0.32 * (rank % 2)
+            texts[i].set_position((x * push, y * push))
+        # 조각 바깥 라벨(영문판의 긴 학명)이 캔버스 밖으로 잘리지 않도록,
+        # 실제 렌더된 글자 크기를 재서 축 범위를 넓힌다 → 원이 그만큼 작아진다.
+        if not self._fit_pie_labels(texts):
+            self._pie_with_legend(plot_values, plot_labels, label_fs)
         if show_title:
-            self.ax.set_title(title, fontsize=_fs(title_fs), fontweight="bold")
+            self._set_title(title, fontsize=_fs(title_fs), fontweight="bold")
+        self._fit_axes_text()
+        self._fit_title()
         self.draw_idle()
+
+    # 조각 바깥 라벨을 유지할 수 있는 최대 확장 배수. 이보다 더 넓혀야 하면
+    # 원이 알아볼 수 없이 작아지므로 범례 배치로 전환한다.
+    _PIE_MAX_HALF = 2.3
+
+    def _fit_pie_labels(self, texts) -> bool:
+        """파이 라벨이 모두 들어가도록 축 범위를 확장한다. 불가능하면 False.
+
+        라벨 폭은 패널 너비·글자 크기에 따라 달라지므로 고정 여백으로는 넓은 창과
+        좁은 1/3 패널을 동시에 만족시킬 수 없다. 한 번 렌더해 실제 글자 상자를
+        데이터 좌표로 환산한 뒤 그 범위를 축에 반영한다(넓힌 만큼 원이 작아진다).
+        """
+        if not texts:
+            return True
+        try:
+            self.figure.draw_without_rendering()
+            inv = self.ax.transData.inverted()
+            half_w = half_h = 1.0
+            for t in texts:
+                (x0, y0), (x1, y1) = inv.transform(t.get_window_extent().get_points())
+                half_w = max(half_w, abs(x0), abs(x1))
+                half_h = max(half_h, abs(y0), abs(y1))
+            if half_w > self._PIE_MAX_HALF or half_h > self._PIE_MAX_HALF:
+                return False
+            pad = 0.06
+            self.ax.set_xlim(-(half_w + pad), half_w + pad)
+            self.ax.set_ylim(-(half_h + pad), half_h + pad)
+        except Exception:  # noqa: BLE001 — 측정 실패 시 기본 범위 유지
+            pass
+        return True
+
+    def _pie_with_legend(self, plot_values, plot_labels, label_fs) -> None:
+        """좁은 패널용 파이 — 조각 옆 라벨 대신 오른쪽 범례로 수종을 표시한다.
+
+        영문판의 긴 학명은 좁은 기여도 패널에서 조각 바깥에 들어가지 않아 서로
+        겹치고 잘린다. 이때는 비율을 조각 위에 쓰고 이름만 범례로 빼서, 원과 글자
+        모두 읽을 수 있는 크기를 유지한다(수치 상세는 옆 표에서 확인).
+        """
+        self.ax.clear()
+        total = sum(plot_values)
+
+        def pct(value: float) -> str:
+            # 얇은 조각은 숫자가 겹치므로 비우고 범례로만 표시한다.
+            return f"{value:.0f}%" if total > 0 and value >= 7.0 else ""
+
+        wedges, _labels, pcts = self.ax.pie(
+            plot_values, startangle=90, counterclock=False,
+            autopct=pct, pctdistance=0.68,
+            wedgeprops={"linewidth": 0.6, "edgecolor": "white"},
+            textprops={"fontsize": _fs(label_fs)},
+        )
+        for t in pcts:
+            t.set_color("white")
+            t.set_fontweight("bold")
+        # 비율은 조각 위에 있으므로 범례는 이름만 — 좁은 패널에서 원이 커진다.
+        self.ax.legend(
+            wedges, plot_labels, loc="center left", bbox_to_anchor=(1.0, 0.5),
+            fontsize=_fs(label_fs), framealpha=0.95, labelspacing=0.5,
+            handlelength=1.2, borderaxespad=0.2,
+        )
 
     def plot_region_bars(self, names: list[str], tree_vals: list[float],
                          shrub_vals: list[float],
@@ -371,7 +558,8 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
         top = max(totals) if totals else 0.0
         for xi, tot in zip(x, totals):
             self.ax.text(xi, tot + (top * 0.01 if top else 0.0), f"{tot:,.1f}",
-                         ha="center", va="bottom", fontsize=_fs(11), fontweight="bold")
+                         ha="center", va="bottom", fontsize=_fs(PLOT_ANNOTATION_PT),
+                         fontweight="bold")
 
         # 지역 식별은 우측 범례가 담당 → x축 라벨 중복 제거(긴 지역명 겹침 방지).
         self.ax.set_xticks([])
@@ -379,14 +567,16 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
         # 막대 위 총합 라벨 공간 확보 (전부 0이면 라벨이 0 위치에 겹치지 않도록 최소 범위 지정)
         self.ax.set_ylim(0, top * 1.15 if top > 0 else 1.0)
         if show_title:
-            self.ax.set_title(title, fontweight="bold")
+            self._set_title(title, fontweight="bold")
         # 범례: 지역명, 축 바깥 오른쪽. 지역이 많으면 열 수를 늘려 세로 넘침 방지.
         ncol = 1 + (len(names) - 1) // 12
         self.ax.legend(
             title=tr("지역"), loc="upper left", bbox_to_anchor=(1.01, 1.0),
-            fontsize=_fs(10), framealpha=0.95, borderaxespad=0.0, ncol=max(1, ncol),
+            fontsize=_fs(PLOT_LEGEND_PT), framealpha=0.95, borderaxespad=0.0, ncol=max(1, ncol),
         )
         self.ax.grid(True, axis="y", alpha=0.3)
+        self._fit_axes_text()
+        self._fit_title()
         self.draw_idle()
 
     def plot_region_density_bars(
@@ -428,7 +618,7 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
                 f"{density:,.4f}",
                 ha="center",
                 va="bottom",
-                fontsize=_fs(10),
+                fontsize=_fs(PLOT_ANNOTATION_PT),
                 fontweight="bold",
             )
 
@@ -436,16 +626,18 @@ class MatplotlibCanvas(FigureCanvasQTAgg):
         self.ax.set_ylabel(tr("면적 정규화 탄소밀도 (kgC/㎡)"))
         self.ax.set_ylim(0, top * 1.18 if top > 0 else 1.0)
         if show_title:
-            self.ax.set_title(tr("지역별 면적 정규화 탄소밀도"), fontweight="bold")
+            self._set_title(tr("지역별 면적 정규화 탄소밀도"), fontweight="bold")
         ncol = 1 + (len(names) - 1) // 12
         self.ax.legend(
             title=tr("지역"),
             loc="upper left",
             bbox_to_anchor=(1.01, 1.0),
-            fontsize=_fs(10),
+            fontsize=_fs(PLOT_LEGEND_PT),
             framealpha=0.95,
             borderaxespad=0.0,
             ncol=max(1, ncol),
         )
         self.ax.grid(True, axis="y", alpha=0.3)
+        self._fit_axes_text()
+        self._fit_title()
         self.draw_idle()

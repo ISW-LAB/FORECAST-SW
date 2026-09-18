@@ -22,6 +22,7 @@ from __future__ import annotations
 from PyQt5.QtWidgets import QApplication
 
 from .ui_scale import ui_scale
+from .typography import HEADING_PT, scaled_point_size
 
 
 # ─────────────────────────── 색상 팔레트 ───────────────────────────
@@ -45,6 +46,8 @@ def build_stylesheet(scale: float = 1.0) -> str:
 
     radius = s(8)
     radius_sm = s(6)
+    # 표 글자는 본문보다 한 단계 크게 — 수치를 읽는 곳이라 가독성이 우선이다.
+    table_pt = scaled_point_size(HEADING_PT, scale)
     pad_v = s(6)
     pad_h = s(12)
 
@@ -147,6 +150,12 @@ def build_stylesheet(scale: float = 1.0) -> str:
     QTabBar::tab:!selected:hover {{ background: #D7DEE4; }}
 
     /* ===== 테이블 ===== */
+    QTableWidget, QHeaderView::section {{
+        /* 스타일시트가 걸린 위젯은 앱 기본 폰트를 잃고 스타일 기본값(작은 글씨)으로
+           돌아갈 수 있다. 모든 표가 같은 크기로 보이도록 여기서 못 박는다.
+           (QSS 는 위젯의 setFont 보다 우선하므로 표 글자 크기는 이 값이 기준이다.) */
+        font-size: {table_pt}pt;
+    }}
     QTableWidget {{
         background: {SURFACE};
         gridline-color: #E6EAEE;

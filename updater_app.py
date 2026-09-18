@@ -45,7 +45,11 @@ from PyQt5.QtWidgets import (
 )
 
 from carbon_calculator.equation_eval import evaluate as _safe_equation_evaluate
+from carbon_calculator.species_names_en import ENVIRONMENT_EN as _ENVIRONMENT_EN
 from carbon_calculator.version import __version__
+from carbon_calculator.typography import (
+    BODY_PT, CAPTION_PT, SMALL_PT, TITLE_PT, font_family, scaled_point_size,
+)
 
 # ── 표시 언어 ────────────────────────────────────────────────────────────
 # 이 앱은 표시문자열에 자체 대응표를 사용한다. 수식 검증은 FORECAST-SW와 같은
@@ -73,13 +77,6 @@ _EN: dict[str, str] = {
     "① exe 재빌드   —   내장 소스로 새 FORECAST-SW.exe 생성 (권장)":
         "① Rebuild Assessment Application — build a new FORECAST-SW executable from the bundled "
         "sources (recommended)",
-    "이 업데이터에 내장된 전체 코드 로직을 사용해 JSON 이 반영된 새 exe 를 만듭니다. "
-    "소스 폴더가 옆에 없어도 됩니다.\n"
-    "※ 컴파일에는 이 PC 에 Python 3.10 이상이 필요합니다 (최초 1회 빌드 환경 자동 구성).":
-        "Builds a new executable with the new JSON applied, using the complete source "
-        "bundled inside this manager. No source folder is required alongside it.\n"
-        "Note: compiling requires Python 3.10 or later on this machine (the build "
-        "environment is created automatically on first use).",
     "출력 폴더 (exe 저장 위치)": "Output folder (where the executable is written)",
     "새 exe 빌드 (PyInstaller)": "Build new executable (PyInstaller)",
 
@@ -90,19 +87,6 @@ _EN: dict[str, str] = {
     "핵심": "Core",
     "최소": "Min",
     "최대": "Max",
-    "표시 직경은 모두 cm입니다 · 교목식은 X=DBH(cm), 기존 관목식은 계수를 "
-    "보존하여 X=10×RCD(cm)로 평가합니다":
-        "All displayed diameters are in cm. Tree equations take X = DBH (cm); legacy "
-        "shrub equations keep their coefficients and are evaluated at X = 10 x RCD (cm).",
-    "핵심 수종은 a·b·CF·범위·성장률을, 확장 수종(국내·국외)은 상대생장식·"
-    "범위·변수를 채웁니다 · 해당 없는 열은 비어 있고 수정할 수 없습니다":
-        "Core species use a, b, CF, range and growth increments; extension species "
-        "(domestic/international) use the equation, range and variables. Columns that "
-        "do not apply are left empty and cannot be edited.",
-    "수종을 추가·삭제하면 세 대상지에 함께 적용됩니다 · 같은 수종의 "
-    "대상지별 값은 각 탭에서 따로 수정합니다":
-        "Adding or removing a species applies to all three site categories; its "
-        "per-category values are edited on each tab separately.",
     "{n}개 수종을 세 대상지에서 모두 삭제할까요?\n{names}":
         "Delete {n} species from all three site categories?\n{names}",
     "{where}: '{name}' 의 상대생장식이 비어 있습니다":
@@ -118,10 +102,6 @@ _EN: dict[str, str] = {
     "출력 폴더를 지정하세요.": "Specify an output folder.",
     "② JSON 적용   —   기존 exe 옆에 복사만 (Python 불필요)":
         "② Apply JSON — deploy it to an existing Assessment Application (no Python required)",
-    "이미 만들어진 FORECAST-SW.exe 가 있다면, 그 옆에 JSON 을 복사해 "
-    "다음 실행 시 즉시 반영합니다. 재빌드가 필요 없을 때 사용하세요.":
-        "If a built executable already exists, the JSON is copied next to it and takes "
-        "effect the next time it runs. Use this when a rebuild is unnecessary.",
     "FORECAST-SW.exe 위치": "Location of the FORECAST-SW Assessment Application",
     "찾기...": "Browse...",
     "JSON 적용 (복사)": "Apply JSON (copy)",
@@ -177,7 +157,7 @@ _EN: dict[str, str] = {
     "관목 (SHRUB_SPECIES)": "Shrubs (SHRUB_SPECIES)",
     "국내 수종 (DOMESTIC_SPECIES)": "Domestic species (DOMESTIC_SPECIES)",
     "국외 수종 (FOREIGN_SPECIES)": "International species (FOREIGN_SPECIES)",
-    "수종명": "Species name", "학명": "Scientific name",
+    "수종명": "Species name", "학명": "Scientific name", "구분": "Type",
     "최소직경(cm)": "Min diameter (cm)", "최대직경(cm)": "Max diameter (cm)",
     "성장률(~10y)": "Growth rate (~10 y)", "성장률(11~20y)": "Growth rate (11–20 y)",
     "성장률(21y~)": "Growth rate (21 y~)",
@@ -351,7 +331,7 @@ def _px(v: float) -> int:
 
 
 def _pt(v: float) -> int:
-    return max(7, round(v * _UI_SCALE))
+    return scaled_point_size(v, _UI_SCALE)
 
 
 _BASE_PT: int | None = None     # 앱 최초 기본 폰트 크기 — 배율을 바꿔도 항상 이 값에서 계산한다
@@ -367,9 +347,8 @@ def _apply_app_font(app: QApplication) -> None:
     f = app.font()
     if _BASE_PT is None:
         _BASE_PT = f.pointSize() if f.pointSize() > 0 else 9
-    if "Malgun" not in f.family() and "맑은" not in f.family():
-        f.setFamily("Malgun Gothic")
-    f.setPointSize(max(_FONT_MIN_PT, round((_BASE_PT + _FONT_DELTA) * _UI_SCALE)))
+    f.setFamily(font_family(_LANG))
+    f.setPointSize(scaled_point_size(BODY_PT, _UI_SCALE))
     app.setFont(f)
 
 
@@ -383,17 +362,17 @@ def _apply_readability_theme(app: QApplication) -> None:
         QLabel {{ color: #24342B; }}
         QLabel#pageTitle {{
             color: #195C39;
-            font-size: {_pt(18)}pt;
+            font-size: {_pt(TITLE_PT)}pt;
             font-weight: 700;
         }}
-        QLabel#pageSubtitle {{ color: #4F6257; font-size: {_pt(10)}pt; }}
+        QLabel#pageSubtitle {{ color: #4F6257; font-size: {_pt(SMALL_PT)}pt; }}
         QLabel#workflowHint {{
             color: #315C45;
             background: #EAF4EE;
             border: 1px solid #BCD6C6;
             border-radius: {_px(6)}px;
             padding: {_px(7)}px {_px(10)}px;
-            font-size: {_pt(10)}pt;
+            font-size: {_pt(SMALL_PT)}pt;
         }}
         QGroupBox {{
             background: #FFFFFF;
@@ -408,6 +387,9 @@ def _apply_readability_theme(app: QApplication) -> None:
             subcontrol-origin: margin;
             left: {_px(12)}px;
             padding: 0 {_px(6)}px;
+        }}
+        QLineEdit, QComboBox, QTableWidget, QAbstractItemView {{
+            font-size: {_pt(BODY_PT)}pt;
         }}
         QLineEdit, QComboBox, QPlainTextEdit, QTableWidget {{
             background: #FFFFFF;
@@ -443,6 +425,7 @@ def _apply_readability_theme(app: QApplication) -> None:
         QPushButton#primaryAction:hover {{ background: #2F7E51; }}
         QPushButton#destructiveAction {{ color: #9A2E2E; border-color: #D7AAAA; }}
         QTabWidget::pane {{ border: 1px solid #B8C8BE; background: white; }}
+        QTabBar {{ font-size: {_pt(BODY_PT)}pt; font-weight: 700; }}
         QTabBar::tab {{
             background: #E9EFEB;
             border: 1px solid #C2CFC7;
@@ -462,6 +445,7 @@ def _apply_readability_theme(app: QApplication) -> None:
             border-right: 1px solid #C7D4CC;
             border-bottom: 1px solid #AEBEB4;
             padding: {_px(6)}px {_px(8)}px;
+            font-size: {_pt(BODY_PT)}pt;
             font-weight: 700;
         }}
         QTableWidget {{ gridline-color: #D6DFD9; alternate-background-color: #F6FAF7; }}
@@ -508,10 +492,6 @@ def _status_css(color) -> str:
     c = "color: %s; " % color if color else ""
     indent = _STATUS_INDENT if _STATUS_INDENT is not None else _px(223)
     return "%smargin-left: %dpx;" % (c, indent)
-
-
-def _note_css() -> str:
-    return "color: #4F6257; font-size: %dpt;" % _pt(10)
 
 
 _IS_EXE = hasattr(sys, '_MEIPASS')
@@ -769,21 +749,49 @@ _DEFAULT_ENVIRONMENTS = (
     "채석장 인공복원",
 )
 
+def _apply_tab_font(tabs: QTabWidget) -> None:
+    """탭 막대 글꼴을 굵게 못 박는다.
+
+    스타일시트가 선택된 탭만 굵게(font-weight: 700) 그리면, 탭 폭은 보통 굵기로
+    계산되어 선택된 탭의 글자가 잘린다. 처음부터 굵은 글꼴로 폭을 계산하게 한다.
+    """
+    f = QFont(font_family(_LANG), _pt(BODY_PT))
+    f.setBold(True)
+    tabs.tabBar().setFont(f)
+
+
+def _env_label(env: str, data: dict | None = None) -> str:
+    """대상지 탭에 표시할 이름 — 영문 모드에서는 ENVIRONMENTS_EN 을 따른다.
+
+    우선순위는 불러온 JSON 의 ENVIRONMENTS_EN → 내장 대응표 → 원문(국문)이다.
+    """
+    if _LANG != "en" or not env:
+        return env
+    from_json = (data or {}).get("ENVIRONMENTS_EN") or {}
+    if isinstance(from_json, dict):
+        name = from_json.get(env)
+        if isinstance(name, str) and name.strip():
+            return name
+    return _ENVIRONMENT_EN.get(env, env)
+
+
 # ── 대상지별 통합 표 ──────────────────────────────────────────────────────
 # 한 대상지·생장형의 전체 수종을 하나의 표로 보여주기 위해 계수형(핵심 22종)과
 # 식형(확장 55종)의 열을 합쳐 둔다. 행 종류에 따라 해당 없는 열은 비어 있고
 # 읽기 전용이 된다.
+# '구분'(핵심/국내/국외)은 값을 입력하는 열이 아니라 행의 성격 표시이므로 맨 뒤에 둔다.
 _MERGED_COLS = [
-    ("수종명", "name"), ("학명", "sci"), ("구분", "origin"),
+    ("수종명", "name"), ("학명", "sci"),
     ("a", "a"), ("b", "b"), ("CF", "cf"),
     ("최소", "dmin"), ("최대", "dmax"),
     ("성장률(~10y)", "g10"), ("성장률(11~20y)", "g20"), ("성장률(21y~)", "g21"),
     ("상대생장식", "eq"), ("변수1 라벨", "v1"), ("변수2 라벨", "v2"),
     ("변수2 최소", "v2min"), ("변수2 최대", "v2max"), ("변수2 기본값", "v2def"),
+    ("구분", "origin"),
 ]
-(_COL_NAME, _COL_SCI, _COL_ORIGIN, _COL_A, _COL_B, _COL_CF, _COL_DMIN, _COL_DMAX,
+(_COL_NAME, _COL_SCI, _COL_A, _COL_B, _COL_CF, _COL_DMIN, _COL_DMAX,
  _COL_G10, _COL_G20, _COL_G21, _COL_EQ, _COL_V1, _COL_V2, _COL_V2MIN, _COL_V2MAX,
- _COL_V2DEF) = range(len(_MERGED_COLS))
+ _COL_V2DEF, _COL_ORIGIN) = range(len(_MERGED_COLS))
 
 # 계수형 행이 쓰는 열 (저장 배열 순서와 같다: a, b, cf, dmin, dmax, g10, g20, g21)
 _COL_CORE = (_COL_A, _COL_B, _COL_CF, _COL_DMIN, _COL_DMAX,
@@ -985,6 +993,14 @@ class SpeciesEditor(QGroupBox):
     # ── UI ────────────────────────────────────────────────────────
     def _new_table(self) -> QTableWidget:
         t = QTableWidget(0, len(_MERGED_COLS))
+        # 표 글꼴을 본문 크기로 못 박는다. 스타일시트가 걸린 위젯은 앱 기본 폰트를
+        # 잃고 스타일 기본값(작은 글씨)으로 돌아갈 수 있어, 표만 작게 보였다.
+        cell_font = QFont(font_family(_LANG), _pt(BODY_PT))
+        header_font = QFont(cell_font)
+        header_font.setBold(True)
+        t.setFont(cell_font)
+        t.horizontalHeader().setFont(header_font)
+        t.verticalHeader().setFont(cell_font)
         t.setHorizontalHeaderLabels([tr(h) for h, _k in _MERGED_COLS])
         t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -993,7 +1009,7 @@ class SpeciesEditor(QGroupBox):
         t.setAlternatingRowColors(True)
         t.setWordWrap(False)
         t.setTextElideMode(Qt.ElideRight)
-        t.verticalHeader().setDefaultSectionSize(_px(34))
+        t.verticalHeader().setDefaultSectionSize(max(_px(40), t.fontMetrics().height() + _px(14)))
         t.verticalHeader().setMinimumSectionSize(_px(32))
         t.horizontalHeader().setMinimumHeight(_px(38))
         t.horizontalHeader().setMinimumSectionSize(_px(70))
@@ -1008,28 +1024,15 @@ class SpeciesEditor(QGroupBox):
         v = QVBoxLayout(self)
 
         self.tabs = QTabWidget()
+        _apply_tab_font(self.tabs)
         self.env_tables: dict[tuple, QTableWidget] = {}
         self.factor_spins: dict[tuple, QDoubleSpinBox] = {}
         self._inner_tabs: dict[str, QTabWidget] = {}
 
         for env in self._env_list:
-            self.tabs.addTab(self._build_env_tab(env), env)
+            self.tabs.addTab(self._build_env_tab(env), _env_label(env))
         self.tabs.currentChanged.connect(self._sync_buttons)
         v.addWidget(self.tabs, 1)
-
-        hint = QLabel(
-            tr("표시 직경은 모두 cm입니다 · 교목식은 X=DBH(cm), 기존 관목식은 계수를 "
-               "보존하여 X=10×RCD(cm)로 평가합니다")
-            + "\n"
-            + tr("핵심 수종은 a·b·CF·범위·성장률을, 확장 수종(국내·국외)은 상대생장식·"
-                 "범위·변수를 채웁니다 · 해당 없는 열은 비어 있고 수정할 수 없습니다")
-            + "\n"
-            + tr("수종을 추가·삭제하면 세 대상지에 함께 적용됩니다 · 같은 수종의 "
-                 "대상지별 값은 각 탭에서 따로 수정합니다")
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet(_note_css())
-        v.addWidget(hint)
 
         row = QHBoxLayout()
         self.add_btn = QPushButton(tr("+ 새 수종 추가"))
@@ -1083,6 +1086,7 @@ class SpeciesEditor(QGroupBox):
         col.addLayout(factor_row)
 
         inner = QTabWidget()
+        _apply_tab_font(inner)
         for kind, title in ((_KIND_TREE, tr("교목")), (_KIND_SHRUB, tr("관목"))):
             t = self._new_table()
             self.env_tables[(env, kind)] = t
@@ -1148,6 +1152,10 @@ class SpeciesEditor(QGroupBox):
         try:
             self._data = data
             sci = data.get("SPECIES_EN") or {}
+            # 불러온 파일이 자체 영문명을 갖고 있으면 탭 이름을 그것으로 맞춘다.
+            for i, env in enumerate(self._env_list):
+                if i < self.tabs.count():
+                    self.tabs.setTabText(i, _env_label(env, data))
             for env in self._env_list:
                 for section in (_SECTION_TREE, _SECTION_SHRUB):
                     spin = self.factor_spins.get((env, section))
@@ -1355,7 +1363,7 @@ class SpeciesEditor(QGroupBox):
 
         for r in range(t.rowCount()):
             name = _get_true_name(t.item(r, _COL_NAME)).strip()
-            where = "%s / %s #%d" % (env, kind_label, r + 1)
+            where = "%s / %s #%d" % (_env_label(env, self._data), kind_label, r + 1)
             if not name:
                 errors.append(tr("{where}: 수종명이 비어 있습니다").format(where=where))
                 continue
@@ -1552,6 +1560,7 @@ class UpdaterWindow(QMainWindow):
             return
         _LANG = code
         _save_language(code)
+        _apply_app_font(QApplication.instance())
         self._rebuild_ui()
 
     def _on_zoom_changed(self, _index: int) -> None:
@@ -1675,14 +1684,6 @@ class UpdaterWindow(QMainWindow):
         build_grp.setStyleSheet("QGroupBox { font-weight: bold; }")
         bl = QVBoxLayout(build_grp)
 
-        _note = QLabel(
-            tr("이 업데이터에 내장된 전체 코드 로직을 사용해 JSON 이 반영된 새 exe 를 만듭니다. "
-            "소스 폴더가 옆에 없어도 됩니다.\n"
-            "※ 컴파일에는 이 PC 에 Python 3.10 이상이 필요합니다 (최초 1회 빌드 환경 자동 구성)."))
-        _note.setStyleSheet(_note_css())
-        _note.setWordWrap(True)
-        bl.addWidget(_note)
-
         self.out_row = FilePickRow(tr("출력 폴더 (exe 저장 위치)"), tr("폴더..."), label_width=self._label_w)
         self.out_row.btn.clicked.connect(self._pick_out_dir)
         self.out_row.edit.textEdited.connect(self._mark_out_edited)
@@ -1713,13 +1714,6 @@ class UpdaterWindow(QMainWindow):
         # ── ② JSON 적용 (Python 불필요) ────────────────────────────
         apply_grp = QGroupBox(tr("② JSON 적용   —   기존 exe 옆에 복사만 (Python 불필요)"))
         al = QVBoxLayout(apply_grp)
-        _anote = QLabel(
-            tr("이미 만들어진 FORECAST-SW.exe 가 있다면, 그 옆에 JSON 을 복사해 "
-            "다음 실행 시 즉시 반영합니다. 재빌드가 필요 없을 때 사용하세요."))
-        _anote.setStyleSheet(_note_css())
-        _anote.setWordWrap(True)
-        al.addWidget(_anote)
-
         self.exe_row = FilePickRow(tr("FORECAST-SW.exe 위치"), tr("찾기..."), label_width=self._label_w)
         self.exe_row.btn.clicked.connect(self._pick_exe)
         self.exe_row.edit.textChanged.connect(self._recheck_exe)
@@ -1745,7 +1739,7 @@ class UpdaterWindow(QMainWindow):
         ll = QVBoxLayout(log_grp)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setFont(QFont("Consolas", _pt(10)))
+        self.log.setFont(QFont(font_family(_LANG), _pt(CAPTION_PT)))
         self.log.setMinimumHeight(_px(180))
         ll.addWidget(self.log)
         v.addWidget(log_grp, 1)
@@ -1786,10 +1780,10 @@ class UpdaterWindow(QMainWindow):
             self.json_status.setStyleSheet(_status_css("gray"))
         elif p.exists():
             ok, msg = _validate_species_json(p)
-            color = "green" if ok else "red"
-            mark = "✓" if ok else "✗"
-            self.json_status.setText(f"{mark} {msg}")
-            self.json_status.setStyleSheet(_status_css(color))
+            # 정상 파일이면 표가 곧바로 채워져 결과가 보이므로 확인 문구를 띄우지 않고,
+            # 문제가 있을 때만 사유를 표시한다.
+            self.json_status.setText("" if ok else "✗ %s" % msg)
+            self.json_status.setStyleSheet(_status_css(None if ok else "red"))
             if ok and load_editor:
                 self._load_into_editor(p)
         else:

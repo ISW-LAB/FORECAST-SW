@@ -398,20 +398,32 @@ def _render_comparison_chart_png(comparison_data: list):
         import matplotlib.pyplot as plt
 
         try:
-            plt.rcParams["font.family"]       = "Malgun Gothic"
+            from .i18n import get_language
+            from . import typography as typo
+            plt.rcParams["font.family"] = [typo.font_family(get_language()), "Malgun Gothic", "DejaVu Sans"]
             plt.rcParams["axes.unicode_minus"] = False
+            # 앱 캔버스와 동일한 글자 크기 (내보낸 이미지도 논문에 그대로 쓰인다).
+            plt.rcParams["font.size"] = typo.PLOT_BODY_PT
+            plt.rcParams["axes.titlesize"] = typo.PLOT_TITLE_PT
+            plt.rcParams["axes.labelsize"] = typo.PLOT_LABEL_PT
+            plt.rcParams["xtick.labelsize"] = typo.PLOT_TICK_PT
+            plt.rcParams["ytick.labelsize"] = typo.PLOT_TICK_PT
+            plt.rcParams["legend.fontsize"] = typo.PLOT_LEGEND_PT
+            annotation_pt = typo.PLOT_ANNOTATION_PT
+            legend_pt = typo.PLOT_LEGEND_PT
         except Exception:
-            pass
+            annotation_pt, legend_pt = 18, 20
 
         names      = [d["name"]  for d in comparison_data]
         totals = [d["total"] for d in comparison_data]
         densities = [d["density"] for d in comparison_data]
 
-        fig = Figure(figsize=(14, 5))
+        # 고정 여백 대신 constrained layout — 글자 크기를 키워도 축 라벨·제목이
+        # 잘리지 않고, 범례는 figure 바깥(오른쪽)에 자리를 따로 확보한다.
+        fig = Figure(figsize=(17, 6.5), layout="constrained")
         canvas = FigureCanvasAgg(fig)
         stock_ax = fig.add_subplot(121)
         density_ax = fig.add_subplot(122)
-        fig.subplots_adjust(left=0.07, right=0.86, bottom=0.15, top=0.88, wspace=0.34)
 
         cmap    = plt.get_cmap("tab10")
         hatches = ["//", "\\\\", "..", "xx", "++", "oo", "--", "**", "||"]
@@ -453,7 +465,7 @@ def _render_comparison_chart_png(comparison_data: list):
                     f"{value:,.{decimals}f}",
                     ha="center",
                     va="bottom",
-                    fontsize=10,
+                    fontsize=annotation_pt,
                     fontweight="bold",
                 )
             axis.set_xticks([])
@@ -466,9 +478,8 @@ def _render_comparison_chart_png(comparison_data: list):
             legend_handles,
             names,
             title=tr("지역"),
-            loc="center right",
-            bbox_to_anchor=(0.995, 0.5),
-            fontsize=10,
+            loc="outside right center",
+            fontsize=legend_pt,
             framealpha=0.95,
         )
 

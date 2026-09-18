@@ -13,6 +13,7 @@ from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
 from vtkmodules.vtkRenderingCore import vtkActor, vtkGlyph3DMapper, vtkPointPicker, vtkPolyDataMapper
 
 from ..i18n import tr
+from ..typography import AXIS_LABEL_PT, AXIS_TITLE_PT
 from .growth_models import render_states
 from .models import RegionVisualizationSnapshot, RenderState
 from .species_profiles import profile_by_key
@@ -102,12 +103,14 @@ class VegetationRenderer:
         axis = self.plotter.show_grid(
             xtitle="X (m)", ytitle="Y (m)", ztitle=tr("수고 (m)"),
             bounds=(0, self.snapshot.area_w, 0, self.snapshot.area_h, 0, z_max),
-            n_zlabels=label_count,
+            # font_family 는 VTK 가 아는 3종(arial/courier/times)만 허용된다.
+            n_zlabels=label_count, font_family="arial", font_size=AXIS_LABEL_PT,
         )
         # X/Y 형식은 기존 show_grid 기본값을 유지하고 Z축만 간결하게 표시한다.
         axis.SetZLabelFormat(label_format)
-        axis.GetZAxesLabelProperty().SetFontSize(10)
-        axis.GetZAxesTitleProperty().SetFontSize(11)
+        for axis_name in ("X", "Y", "Z"):
+            getattr(axis, f"Get{axis_name}AxesLabelProperty")().SetFontSize(AXIS_LABEL_PT)
+            getattr(axis, f"Get{axis_name}AxesTitleProperty")().SetFontSize(AXIS_TITLE_PT)
         self._z_axis_max = z_max
 
     @staticmethod

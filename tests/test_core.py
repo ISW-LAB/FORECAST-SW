@@ -75,6 +75,55 @@ class LibraryTests(unittest.TestCase):
         self.assertGreater(checked, 200)
         self.assertEqual(sorted(missing), [])
 
+    def test_updater_korean_ui_literals_have_english_translations(self) -> None:
+        """라이브러리 관리자(updater_app.py)도 같은 기준으로 검사한다.
+
+        이 앱은 carbon_calculator 의 EN 이 아니라 자체 _EN 대응표를 쓰기 때문에,
+        위 검사만으로는 관리자 화면의 누락(예: 표 머리글)을 잡지 못했다.
+        """
+        path = REPOSITORY_ROOT / "updater_app.py"
+        source = path.read_text(encoding="utf-8")
+        namespace: dict = {}
+        tree = ast.parse(source, filename=str(path))
+        wanted = ("_EN", "_MERGED_COLS")
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names = [node.target.id]
+            else:
+                continue
+            if any(name in wanted for name in names):
+                exec(compile(ast.Module([node], []), str(path), "exec"), namespace)
+        english = namespace["_EN"]
+        columns = [header for header, _key in namespace["_MERGED_COLS"]]
+
+        missing: set[str] = set()
+        checked = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            if not isinstance(node.func, ast.Name) or node.func.id != "tr":
+                continue
+            key = node.args[0]
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                continue
+            if not re.search(r"[가-힣]", key.value):
+                continue
+            checked += 1
+            if key.value not in english:
+                missing.add(key.value)
+
+        # 표 머리글은 tr(h) 로 한 번에 번역되므로 위 순회에 잡히지 않는다.
+        for header in columns:
+            if re.search(r"[가-힣]", header):
+                checked += 1
+                if header not in english:
+                    missing.add(header)
+
+        self.assertGreater(checked, 100)
+        self.assertEqual(sorted(missing), [])
+
     def test_all_bundled_species_have_english_scientific_names(self) -> None:
         names = {
             *TREE_SPECIES,

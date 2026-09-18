@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 
 from .i18n import tr
 from .ui_scale import pt, px
+from .typography import SMALL_PT
 
 
 # 마우스 휠로 값이 의도치 않게 바뀌는 것을 방지하기 위한 입력 위젯들.
@@ -207,8 +208,7 @@ class ResultTable(QTableWidget):
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(px(48))
-        # 가로 스크롤 금지 → 항상 패널 폭에 맞춤
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         header.sectionResized.connect(self._on_section_resized)
 
     def fit_columns(self) -> None:
@@ -220,13 +220,18 @@ class ResultTable(QTableWidget):
         if vp <= 0:
             return
         min_sec = self.horizontalHeader().minimumSectionSize()
-        others = sum(self.columnWidth(c) for c in range(n) if c != self._flex_col)
-        flex_w = max(min_sec, vp - others)
-        if self.columnWidth(self._flex_col) == flex_w:
-            return
         self._fitting = True
-        self.setColumnWidth(self._flex_col, flex_w)
-        self._fitting = False
+        try:
+            metrics = QFontMetrics(self.horizontalHeader().font())
+            for c in range(n):
+                item = self.horizontalHeaderItem(c)
+                if c != self._flex_col and item is not None:
+                    minimum = metrics.horizontalAdvance(item.text()) + px(20)
+                    self.setColumnWidth(c, max(self.columnWidth(c), minimum))
+            others = sum(self.columnWidth(c) for c in range(n) if c != self._flex_col)
+            self.setColumnWidth(self._flex_col, max(min_sec, px(160), vp - others))
+        finally:
+            self._fitting = False
 
     def _on_section_resized(self, idx: int, _old: int, _new: int) -> None:
         # flex 열 자체의 변경/내부 보정 중에는 무시(재귀 방지)
@@ -259,7 +264,7 @@ class LinearGauge(QWidget):
     _TRACK_H = 16      # 바 두께 (기준 해상도 px)
     _TICK_LEN = 5      # 눈금 길이
     _TICK_GAP = 3      # 눈금 끝 ↔ 눈금값 사이 여백
-    _TICK_PT = 11      # 눈금값 글자 크기(pt)
+    _TICK_PT = SMALL_PT  # 눈금값 글자 크기(pt)
     _RADIUS = 4        # 바 모서리 둥글기
 
     def __init__(self, minimum: float = 0.0, maximum: float = 100.0,
@@ -282,7 +287,7 @@ class LinearGauge(QWidget):
     # ----- 세로 배치 -----
 
     def _tick_font(self) -> QFont:
-        font = QFont()
+        font = QFont(self.font())
         font.setPointSize(pt(self._TICK_PT))
         return font
 

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import QRect, Qt
+from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QAction, QActionGroup, QApplication, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
@@ -31,8 +31,10 @@ from .i18n import (
 from .excel_export import export_all_regions_to_excel
 from .main_window import MainWindow as Carbon1Window
 from .main_window2 import Carbon2MainWindow
-from .plotting import MatplotlibCanvas
-from .ui_scale import apply_dialog_size, apply_window_size, pt, px
+from .plotting import MatplotlibCanvas, set_plot_font_scale
+from .font_config import setup_application_fonts
+from .ui_scale import apply_dialog_size, apply_window_size, pt, px, ui_scale
+from .typography import BODY_PT, HEADING_PT, TITLE_PT
 from .version import __version__
 
 
@@ -208,7 +210,7 @@ class RegionComparisonDialog(QDialog):
         v.setSpacing(8)
 
         title = QLabel(tr("프로필별 식재 구성 및 탄소저장량 비교"))
-        tf = title.font(); tf.setPointSize(pt(16)); tf.setBold(True)
+        tf = title.font(); tf.setPointSize(pt(TITLE_PT)); tf.setBold(True)
         title.setFont(tf); title.setStyleSheet("color: #246B43;")
         v.addWidget(title)
 
@@ -276,16 +278,30 @@ class RegionComparisonDialog(QDialog):
             tr("총 탄소저장량(kgC)"),
             tr("면적 정규화\n탄소밀도(kgC/㎡)"),
         ]
+        # 표 글꼴을 다른 결과 표와 같은 크기로 못 박는다 — 전역 QSS 가 걸린 위젯은
+        # 앱 기본 폰트를 잃고 스타일 기본값(작은 글씨)으로 돌아갈 수 있다.
+        cell_font = QFont(table.font())
+        cell_font.setPointSize(pt(HEADING_PT))
+        header_font = QFont(cell_font)
+        header_font.setBold(True)
+        table.setFont(cell_font)
+        table.horizontalHeader().setFont(header_font)
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.setRowCount(len(data))
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setAlternatingRowColors(True)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.horizontalHeader().setMinimumHeight(px(58))
-        table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        table.horizontalHeader().setStretchLastSection(False)
+        # 열 제목은 폭이 모자라면 잘린다 → 단어 단위 줄바꿈을 켜고, 줄이 늘어난
+        # 만큼의 높이를 미리 확보한다(영문 제목이 한글보다 길어 특히 필요하다).
+        # Qt.TextWordWrap 은 TextFlag 라 AlignmentFlag 와 OR 하면 평범한 int 가 된다.
+        # PyQt5 는 int 를 거부하므로(→ 예외 발생 시 앱이 그대로 종료된다) Alignment 로 감싼다.
+        table.horizontalHeader().setDefaultAlignment(
+            Qt.Alignment(Qt.AlignCenter | Qt.TextWordWrap))
         table.setWordWrap(True)
+        cell_font_h = table.fontMetrics().height()
         for i, d in enumerate(data):
             tree_quantity = int(d.get("tree_quantity", 0))
             shrub_quantity = int(d.get("shrub_quantity", 0))
@@ -307,7 +323,22 @@ class RegionComparisonDialog(QDialog):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignVCenter | (Qt.AlignLeft if j == 0 else Qt.AlignCenter))
                 table.setItem(i, j, item)
-            table.setRowHeight(i, px(44))
+            table.setRowHeight(i, max(px(44), cell_font_h + px(14)))
+
+        # 열 폭 → 머리글 높이 순서로 맞춘다(줄 수가 열 폭에 달려 있다).
+        self._table = table
+        self._table_headers = headers
+        self._table_fonts = (cell_font, header_font)
+        self._fit_column_widths(table, headers, cell_font, header_font)
+        table.horizontalHeader().setMinimumHeight(
+            self._wrapped_header_height(table, headers, header_font))
+
+        # 지역 수가 적을 때 표가 잘려 보이지 않도록, 머리글 + 전체 행이 들어갈
+        # 높이를 확보한다(많으면 스크롤).
+        visible_rows = min(table.rowCount(), 8)
+        row_h = max(px(44), cell_font_h + px(14))
+        table.setMinimumHeight(table.horizontalHeader().minimumHeight()
+                               + row_h * visible_rows + px(16))
         v.addWidget(table, 2)
 
         note = QLabel(
@@ -315,7 +346,7 @@ class RegionComparisonDialog(QDialog):
                "교목·관목 열은 유효 개체 수 | 설정된 식재면적을 나타냅니다. "
                "식재면적은 입력 보호용 값이며 수종별 식재 권고가 아닙니다.")
         )
-        note.setStyleSheet("color: #555; font-size: 9pt;")
+        note.setStyleSheet("color: #555;")
         note.setWordWrap(True)
         v.addWidget(note)
 
@@ -324,6 +355,67 @@ class RegionComparisonDialog(QDialog):
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         v.addWidget(buttons)
+
+    def resizeEvent(self, event):    # noqa: N802 — Qt 시그니처
+        """창 폭이 바뀌면 열 폭과 머리글 높이를 다시 맞춘다."""
+        super().resizeEvent(event)
+        table = getattr(self, "_table", None)
+        if table is None:
+            return
+        cell_font, header_font = self._table_fonts
+        self._fit_column_widths(table, self._table_headers, cell_font, header_font)
+        table.horizontalHeader().setMinimumHeight(
+            self._wrapped_header_height(table, self._table_headers, header_font))
+
+    def _fit_column_widths(self, table: QTableWidget, headers: List[str],
+                           cell_font: QFont, header_font: QFont) -> None:
+        """열마다 필요한 폭을 주고, 남는 폭은 첫 열(지역명)이 흡수하게 한다.
+
+        모든 열을 같은 폭으로 나누면(Stretch) 값이 긴 열은 '...' 로 생략되고 짧은
+        열은 남아돈다. 셀 값과 머리글의 가장 긴 낱말을 재서 열마다 따로 잡는다.
+        """
+        cell_metrics = QFontMetrics(cell_font)
+        header_metrics = QFontMetrics(header_font)
+        pad = px(22)
+        widths: List[int] = []
+        for column in range(table.columnCount()):
+            cells = [table.item(row, column) for row in range(table.rowCount())]
+            widest_cell = max((cell_metrics.horizontalAdvance(c.text())
+                               for c in cells if c is not None), default=0)
+            # 머리글은 줄바꿈되므로 가장 긴 '낱말' 만 들어가면 잘리지 않는다.
+            words = headers[column].replace("\n", " ").split(" ") or [""]
+            widest_word = max((header_metrics.horizontalAdvance(w) for w in words),
+                              default=0)
+            widths.append(max(widest_cell, widest_word) + pad)
+
+        viewport = table.viewport().width() or (self.width() - px(40))
+        total = sum(widths)
+        slack = max(px(320), viewport) - total
+        if slack > 0 and total > 0:
+            widths = [w + int(slack * w / total) for w in widths]
+        for column, width in enumerate(widths):
+            table.setColumnWidth(column, width)
+
+    def _wrapped_header_height(self, table: QTableWidget, headers: List[str],
+                               font: QFont) -> int:
+        """열 제목이 줄바꿈된 뒤 필요한 머리글 높이(px)를 계산한다.
+
+        열마다 폭이 다르므로 각 열의 실제 폭에서 몇 줄이 되는지 재고,
+        가장 높은 값을 머리글 높이로 쓴다.
+        """
+        metrics = QFontMetrics(font)
+        columns = max(1, len(headers))
+        fallback = max(px(70), max(px(320), self.width() - px(40)) // columns)
+        tallest = metrics.height()
+        for index, text in enumerate(headers):
+            column_w = table.columnWidth(index) or fallback
+            # 스타일이 그릴 때의 좌우 여백을 넉넉히 빼고 재어, 줄 수를 모자라게
+            # 잡아 마지막 줄이 잘리는 일이 없게 한다.
+            box = metrics.boundingRect(
+                QRect(0, 0, max(px(40), column_w - px(20)), px(400)),
+                int(Qt.AlignCenter | Qt.TextWordWrap), text)
+            tallest = max(tallest, box.height())
+        return max(px(58), tallest + px(26))
 
 
 # ------------------------------ 통합 메인 윈도우 ------------------------------
@@ -366,7 +458,7 @@ class CombinedMainWindow(QMainWindow):
         tabs.setMovable(True)
         tabs.setTabsClosable(True)
         tabs.tabCloseRequested.connect(self._close_region)
-        tab_font = QFont(); tab_font.setPointSize(pt(13)); tab_font.setBold(True)
+        tab_font = QFont(); tab_font.setPointSize(pt(BODY_PT)); tab_font.setBold(True)
         tabs.tabBar().setFont(tab_font)
 
         # 좌상단 [+ 지역 추가], 우상단 [지역 종합 분석]
@@ -705,6 +797,8 @@ class CombinedMainWindow(QMainWindow):
 
     def _apply_language_change(self) -> None:
         """현재 창을 유지한 채 전체 UI를 새 언어로 즉시 다시 구성한다."""
+        setup_application_fonts(QApplication.instance())
+        set_plot_font_scale(ui_scale())
         self._teardown_regions()
         self._carbon2.close()
         self._carbon2.deleteLater()

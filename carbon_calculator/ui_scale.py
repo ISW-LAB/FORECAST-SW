@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QWidget
+from .typography import scaled_point_size
 
 
 # 설계 기준 해상도 (이 해상도의 사용 가능 영역에서 scale = 1.0)
@@ -86,8 +87,8 @@ def px(value: float) -> int:
 
 
 def pt(point_size: float) -> int:
-    """폰트 포인트 크기를 현재 스케일로 변환 (가독성 위해 최소 7pt)."""
-    return max(7, round(point_size * ui_scale()))
+    """Scale text while retaining a readable 12pt minimum."""
+    return scaled_point_size(point_size, ui_scale())
 
 
 def apply_window_size(window: QWidget,

@@ -13,6 +13,8 @@ from PyQt5.QtWidgets import (
 )
 
 from .i18n import LANG_EN, LANG_KO
+from .typography import HEADING_PT
+from .ui_scale import pt
 
 
 class LanguageDialog(QDialog):
@@ -29,7 +31,7 @@ class LanguageDialog(QDialog):
         layout.setSpacing(10)
 
         title = QLabel("Select the display language.")
-        font = title.font(); font.setPointSize(font.pointSize() + 2); font.setBold(True)
+        font = title.font(); font.setPointSize(pt(HEADING_PT)); font.setBold(True)
         title.setFont(font)
         layout.addWidget(title)
 

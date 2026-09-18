@@ -14,6 +14,7 @@ from pyvistaqt import QtInteractor
 
 from ..i18n import environment_name, species_name, tr
 from ..ui_scale import pt, px
+from ..typography import HEADING_PT
 from .models import RegionVisualizationSnapshot
 from .detail_dialog import VegetationDetailDialog
 from .inspection import inspect_instance
@@ -54,7 +55,7 @@ class VegetationVisualizationTab(QWidget):
         root.setSpacing(5)
 
         self.region_label = QLabel(tr("시각화를 새로고침하세요."))
-        font = self.region_label.font(); font.setPointSize(pt(11)); font.setBold(True)
+        font = self.region_label.font(); font.setPointSize(pt(HEADING_PT)); font.setBold(True)
         self.region_label.setFont(font)
         self.region_label.setStyleSheet("color: #246B43; padding: 3px;")
         root.addWidget(self.region_label)

@@ -35,6 +35,7 @@ from .i18n import species_name, tr
 from .version import __version__
 from .plotting import MatplotlibCanvas
 from .ui_scale import apply_dialog_size, pt, px
+from .typography import HEADING_PT, VALUE_PT
 from .widgets import (
     LinearGauge, NoWheelComboBox, NoWheelDoubleSpinBox, NoWheelSpinBox,
     ResultTable, SearchableComboBox, align_gauge_row,
@@ -284,7 +285,7 @@ class TreeInputRow(QFrame):
         top.setSpacing(4)
         origin_widget = QLabel(f"[{origin_label(origin)}]")
         origin_widget.setStyleSheet("color: #246B43; font-weight: bold;")
-        origin_widget.setFixedWidth(px(50))
+        origin_widget.setMinimumWidth(origin_widget.sizeHint().width())
         top.addWidget(origin_widget)
         self.combo = NoWheelComboBox()
         # 표시는 현재 언어의 수종명, 데이터는 계산에 쓰는 국명 키.
@@ -300,7 +301,7 @@ class TreeInputRow(QFrame):
         top.addWidget(self.combo, 1)
         self.delete_button = QPushButton(tr("삭제"))
         self.delete_button.setObjectName("deleteButton")
-        self.delete_button.setFixedWidth(px(54))
+        self.delete_button.setMinimumWidth(self.delete_button.sizeHint().width())
         self.delete_button.clicked.connect(lambda: self.deleted.emit(self))
         top.addWidget(self.delete_button)
         outer.addLayout(top)
@@ -470,7 +471,7 @@ class Carbon2MainWindow(QMainWindow):
         # 계산 버튼 (주 액션 — 스타일은 전역 테마의 #calcButton 규칙)
         self.calc_button = QPushButton(tr("계   산"))
         self.calc_button.setObjectName("calcButton")
-        font = QFont(); font.setPointSize(pt(18)); font.setBold(True)
+        font = QFont(); font.setPointSize(pt(HEADING_PT)); font.setBold(True)
         self.calc_button.setFont(font)
         self.calc_button.setCursor(Qt.PointingHandCursor)
         self.calc_button.clicked.connect(self.on_calculate)
@@ -512,20 +513,20 @@ class Carbon2MainWindow(QMainWindow):
         # 총합 게이지 + 숫자
         self.total_gauge = LinearGauge(0, 2000, [0, 500, 1000, 1500, 2000])
         self.total_value_label = QLabel("0.00")
-        self.total_value_label.setMinimumWidth(px(160))
+        self.total_value_label.setMinimumWidth(px(185))
         self.total_value_label.setAlignment(Qt.AlignCenter)
         self.total_value_label.setStyleSheet(
             "background: #FFFFFF; border: 1px solid #C4CCD3; "
             "border-radius: 6px; padding: 6px; color: #246B43;"
         )
-        big = QFont(); big.setPointSize(pt(17)); big.setBold(True)
+        big = QFont(); big.setPointSize(pt(VALUE_PT)); big.setBold(True)
         self.total_value_label.setFont(big)
 
         # 제목·바·값을 같은 높이의 상단 밴드에 넣고 상단 정렬 → 세로 중심선 일치.
         gauge_row = QHBoxLayout()
         gauge_row.setSpacing(px(10))
         title = QLabel(tr("총 탄소저장량 (kgC)"))
-        title.setMinimumWidth(px(160))
+        title.setMinimumWidth(px(185))
         title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         title.setStyleSheet("font-weight: bold;")
         align_gauge_row(title, self.total_gauge, self.total_value_label)
@@ -541,7 +542,9 @@ class Carbon2MainWindow(QMainWindow):
         pie_frame.setFrameShape(QFrame.StyledPanel)
         pf = QVBoxLayout(pie_frame); pf.setContentsMargins(2, 2, 2, 2)
         pf.addWidget(self.pie_canvas)
-        v.addWidget(pie_frame, 3)
+        # 그래프가 주 화면 — 표가 글꼴 크기만큼 커져도 그림 영역을 지키게 한다.
+        pie_frame.setMinimumHeight(px(320))
+        v.addWidget(pie_frame, 4)
 
         # 결과 테이블 2개
         tables = QHBoxLayout()
@@ -563,16 +566,15 @@ class Carbon2MainWindow(QMainWindow):
         table.setAlternatingRowColors(True)
         table.setWordWrap(False)
 
-        # 테이블 값/헤더 글꼴 대폭 확대 — 본문 폰트보다 +4pt
+        # 테이블 값/헤더 글꼴 — 본문보다 한 단계 큰 섹션 크기
         tfont = table.font()
-        base = tfont.pointSize() if tfont.pointSize() > 0 else 12
-        tfont.setPointSize(base + 4)
+        tfont.setPointSize(pt(HEADING_PT))
         table.setFont(tfont)
 
         # 숫자 열 기본 너비(드래그 조절 가능). 수종 열은 ResultTable 이 잔여 폭으로 채움.
-        table.setColumnWidth(1, px(100))   # DBH
-        table.setColumnWidth(2, px(80))    # 수량
-        table.setColumnWidth(3, px(130))   # 탄소량
+        table.setColumnWidth(1, px(125))   # DBH
+        table.setColumnWidth(2, px(100))   # 수량
+        table.setColumnWidth(3, px(170))   # 탄소량
         # 행 높이는 글꼴 크기에 맞춰 자동
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         return table
@@ -580,10 +582,9 @@ class Carbon2MainWindow(QMainWindow):
     def _table_box(self, title: str, table: QTableWidget) -> QVBoxLayout:
         box = QVBoxLayout()
         lbl = QLabel(title)
-        # 결과 섹션 제목 — 강조색 + 본문 폰트보다 +3pt
+        # 결과 섹션 제목 — 강조색 + 본문보다 한 단계 큰 섹션 크기
         title_font = lbl.font()
-        base = title_font.pointSize() if title_font.pointSize() > 0 else 12
-        title_font.setPointSize(base + 3)
+        title_font.setPointSize(pt(HEADING_PT))
         title_font.setBold(True)
         lbl.setFont(title_font)
         lbl.setStyleSheet("color: #246B43;")

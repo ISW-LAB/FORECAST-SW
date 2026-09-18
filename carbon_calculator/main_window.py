@@ -49,6 +49,7 @@ from .excel_export import export_carbon1_to_excel
 from .plotting import MatplotlibCanvas
 from .projections import project_record, assumption_note
 from .ui_scale import apply_dialog_size, pt, px
+from .typography import HEADING_PT, PLOT_ANNOTATION_PT, PLOT_TITLE_PT, VALUE_PT
 from .widgets import (
     LinearGauge, NoWheelComboBox, NoWheelDoubleSpinBox, NoWheelSpinBox, ResultTable,
     SearchableComboBox, align_gauge_row,
@@ -543,7 +544,7 @@ class SpeciesInputRow(QFrame):
 
         self.delete_button = QPushButton(tr("삭제"))
         self.delete_button.setObjectName("deleteButton")
-        self.delete_button.setFixedWidth(px(54))
+        self.delete_button.setMinimumWidth(self.delete_button.sizeHint().width())
         self.delete_button.clicked.connect(self._on_delete)
         top.addWidget(self.delete_button)
         outer.addLayout(top)
@@ -731,7 +732,7 @@ class MainWindow(QMainWindow):
         left.setMaximumWidth(px(560))
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([px(340), px(1000)])
+        splitter.setSizes([px(400), px(1000)])
         root.addWidget(splitter)
 
     def _build_left_panel(self) -> QWidget:
@@ -772,7 +773,7 @@ class MainWindow(QMainWindow):
         self.calc_button = QPushButton(tr("계   산"))
         self.calc_button.setObjectName("calcButton")
         font = QFont()
-        font.setPointSize(pt(18))
+        font.setPointSize(pt(HEADING_PT))
         font.setBold(True)
         self.calc_button.setFont(font)
         self.calc_button.setCursor(Qt.PointingHandCursor)
@@ -964,15 +965,20 @@ class MainWindow(QMainWindow):
         self.shrub_table = self._make_result_table()
         tables.addLayout(self._table_box(tr("교목 결과 (DBH·cm)"), self.tree_table, "tree"))
         tables.addLayout(self._table_box(tr("관목 결과 (RCD·cm)"), self.shrub_table, "shrub"))
+        # 표는 헤더 + 4행이 보이는 높이만 확보한다(더 보려면 스플리터를 내리면 된다).
+        # 여기를 크게 잡으면 글꼴이 커진 만큼 그래프 영역을 그대로 빼앗는다.
+        tables_widget.setMinimumHeight(max(px(170), self.tree_table.fontMetrics().height() * 4 + px(30)))
 
-        # 그래프(sub tab) ↔ 결과 테이블 사이 높이를 세로 드래그로 조절
+        # 그래프(sub tab) ↔ 결과 테이블 사이 높이를 세로 드래그로 조절.
+        # 그래프·시각화가 주 화면이므로 최소 높이를 따로 확보하고 배분도 더 준다.
+        graph_tabs.setMinimumHeight(px(360))
         body_splitter = QSplitter(Qt.Vertical)
         body_splitter.setChildrenCollapsible(False)
         body_splitter.addWidget(graph_tabs)
         body_splitter.addWidget(tables_widget)
-        body_splitter.setStretchFactor(0, 3)
+        body_splitter.setStretchFactor(0, 4)
         body_splitter.setStretchFactor(1, 1)
-        body_splitter.setSizes([px(680), px(200)])
+        body_splitter.setSizes([px(760), px(190)])
         v.addWidget(body_splitter, 1)
 
         return wrap
@@ -991,7 +997,7 @@ class MainWindow(QMainWindow):
         col.addWidget(note)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedHeight(px(34))
+        scroll.setFixedHeight(max(px(48), self.fontMetrics().height() + px(26)))
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         host = QWidget()
         legend = QHBoxLayout(host)
@@ -1013,14 +1019,14 @@ class MainWindow(QMainWindow):
 
     def _make_value_field(self, initial: str) -> QLabel:
         lbl = QLabel(initial)
-        lbl.setMinimumWidth(px(130))
+        lbl.setMinimumWidth(px(150))
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet(
             "background: #FFFFFF; border: 1px solid #C4CCD3; "
             "border-radius: 6px; padding: 6px; color: #246B43;"
         )
         font = QFont()
-        font.setPointSize(pt(15))
+        font.setPointSize(pt(VALUE_PT))
         font.setBold(True)
         lbl.setFont(font)
         return lbl
@@ -1034,7 +1040,7 @@ class MainWindow(QMainWindow):
         아래에 걸린다. 제목은 오른쪽 정렬이라 바로 옆 바와 바로 이어져 읽힌다.
         """
         title_label = QLabel(title)
-        title_label.setMinimumWidth(px(150))
+        title_label.setMinimumWidth(px(170))
         title_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         title_label.setStyleSheet("font-weight: bold;")
         align_gauge_row(title_label, gauge, value_label)
@@ -1050,18 +1056,17 @@ class MainWindow(QMainWindow):
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setAlternatingRowColors(True)
-        table.setWordWrap(False)
+        table.setWordWrap(True)
 
-        # 테이블 값/헤더 글꼴 대폭 확대 — 본문 폰트보다 +4pt
+        # 테이블 값/헤더 글꼴 — 본문보다 한 단계 큰 섹션 크기
         tfont = table.font()
-        base = tfont.pointSize() if tfont.pointSize() > 0 else 12
-        tfont.setPointSize(base + 4)
+        tfont.setPointSize(pt(HEADING_PT))
         table.setFont(tfont)
 
         # 숫자 열 기본 너비(드래그 조절 가능). 수종 열은 ResultTable 이 잔여 폭으로 채움.
-        table.setColumnWidth(1, px(90))    # 직경
-        table.setColumnWidth(2, px(80))    # 수량
-        table.setColumnWidth(3, px(130))   # 탄소량
+        table.setColumnWidth(1, px(120))   # 직경
+        table.setColumnWidth(2, px(100))   # 수량
+        table.setColumnWidth(3, px(170))   # 탄소량
         # 행 높이는 글꼴 크기에 맞춰 자동
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         return table
@@ -1070,10 +1075,9 @@ class MainWindow(QMainWindow):
                    kind: Optional[str] = None) -> QVBoxLayout:
         box = QVBoxLayout()
         lbl = QLabel(title)
-        # 결과 섹션 제목 — 강조색 + 본문 폰트보다 +3pt
+        # 결과 섹션 제목 — 강조색 + 본문보다 한 단계 큰 섹션 크기
         title_font = lbl.font()
-        base = title_font.pointSize() if title_font.pointSize() > 0 else 12
-        title_font.setPointSize(base + 3)
+        title_font.setPointSize(pt(HEADING_PT))
         title_font.setBold(True)
         lbl.setFont(title_font)
         lbl.setStyleSheet("color: #246B43;")
@@ -1659,7 +1663,7 @@ class MainWindow(QMainWindow):
         # 제목은 패널 상단 라벨로 표시하므로 차트 제목은 끈다.
         canvas.plot_pie(
             labels, values, title=tr("{kind} 수종별 기여도").format(kind=label_kr),
-            top_n=5, label_fs=10, title_fs=12, show_title=False,
+            top_n=5, label_fs=PLOT_ANNOTATION_PT, title_fs=PLOT_TITLE_PT, show_title=False,
         )
 
     # ----- Excel 저장 (요구사항 3) -----
