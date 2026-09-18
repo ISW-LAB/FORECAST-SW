@@ -187,19 +187,10 @@ class SpeciesLibraryTests(unittest.TestCase):
                             else species_library.KIND_TREE)
                 self.assertEqual(record.kind, expected)
 
-    def test_year_projection_is_limited_to_records_with_growth_increments(self) -> None:
-        """연도축 추정은 성장차를 보유한 core 22종만 지원한다."""
-        supported = [r for r in species_library.all_records().values()
-                     if r.supports_year_projection]
-        self.assertEqual(len(supported), 22)
-        for record in supported:
-            with self.subTest(species=record.key):
-                self.assertIsNotNone(record.species_data)
-        for record in species_library.all_records().values():
-            if record.is_extension:
-                with self.subTest(species=record.key):
-                    self.assertFalse(record.supports_year_projection)
-                    self.assertIsNone(record.species_data)
+    def test_year_projection_includes_explicit_assumptions(self) -> None:
+        records = species_library.all_records().values()
+        self.assertEqual(sum(r.supports_year_projection for r in records), 77)
+        self.assertEqual(sum(r.species_data is None for r in records), 55)
 
     @staticmethod
     def _representative_input(record) -> float:

@@ -16,7 +16,7 @@ from .species_profiles import SpeciesRenderProfile, growth_sensitivity, profile_
 VISUAL_FALLBACK_SOURCE = "Carbon1 3D visual fallback (not a scientific height/crown model)"
 
 
-def diameter_timeline(species_data, starting_diameter: float, *, years: int = 50) -> np.ndarray:
+def diameter_timeline(species_data, starting_diameter: float, *, years: int = 30) -> np.ndarray:
     """DBH/RCD 공통 cm 계약으로 직경 timeline을 만든다."""
     values = np.zeros(years + 1, dtype=float)
     values[0] = starting_diameter
@@ -99,7 +99,7 @@ def rendered_crown(profile: SpeciesRenderProfile, initial_diameter_m: float,
 
 
 def render_states(snapshot: RegionVisualizationSnapshot, year: int) -> tuple[RenderState, ...]:
-    year = max(0, min(50, int(year)))
+    year = max(0, min(30, int(year)))
     groups = {g.group_id: g for g in snapshot.groups}
     states: list[RenderState] = []
     for instance in snapshot.instances:

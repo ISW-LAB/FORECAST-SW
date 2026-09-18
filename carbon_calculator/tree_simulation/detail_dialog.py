@@ -74,13 +74,13 @@ class VegetationDetailDialog(QDialog):
             (tr("경과 연도"), f"Year {info.year}"),
             (tr("같은 입력 그룹 수량"),
              tr("{n:,}주").format(n=info.group_quantity)),
-            (tr("현재 {name}").format(name=diameter_name),
-             f"{info.diameter:,.2f} {info.diameter_unit}"),
+            (info.predictor_label or tr("현재 {name}").format(name=diameter_name),
+             f"{info.predictor_value:,.2f}"),
             (tr("현재 개체 탄소저장량"),
              tr("{carbon:,.4f} kgC/주").format(carbon=info.carbon_kgc)),
-            (tr("상대생장식 계수"), f"a={info.a:g} · b={info.b:g} · CF={info.cf:g}"),
+            (tr("상대생장식 계수"), info.formula or f"a={info.a:g} · b={info.b:g} · CF={info.cf:g}"),
             (tr("직경 성장률"),
-             tr("1~10년 {y10:g} · 11~20년 {y20:g} · 21년+ {y21:g} cm/yr")
+             info.scenario_note or tr("1~10년 {y10:g} · 11~20년 {y20:g} · 21년+ {y21:g} cm/yr")
              .format(y10=info.growth_y10, y20=info.growth_y20, y21=info.growth_y21)),
             (tr("지역 내 위치"), f"X {info.x_m:,.2f} m · Y {info.y_m:,.2f} m"),
             (tr("표현 줄기 직경 (시각화용)"), f"{info.rendered_trunk_diameter_m:,.3f} m"),
@@ -88,7 +88,7 @@ class VegetationDetailDialog(QDialog):
             (tr("표현 수관 폭 (시각화용)"), f"{info.crown_width_m:,.2f} m"),
             (tr("표현 수관 길이 (시각화용)"), f"{info.crown_length_m:,.2f} m"),
             (tr("표현 풍성함 (시각화용)"), f"{info.visual_development * 100:,.0f}%"),
-            (tr("데이터 구분"), tr("DBH/RCD·탄소: 기존 프로젝트 데이터 / 수고·수관·풍성함: visual fallback")),
+            (tr("데이터 구분"), info.scenario_note or tr("DBH/RCD·탄소: 기존 프로젝트 데이터 / 수고·수관·풍성함: visual fallback")),
         )
         for label, value in rows:
             field = QLabel(value); field.setWordWrap(True); field.setTextInteractionFlags(Qt.TextSelectableByMouse)

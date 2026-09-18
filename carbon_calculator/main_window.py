@@ -8,7 +8,7 @@ FORECAST-SW - PyQt5 메인 윈도우.
     * 각 탭 상단에 "추가" 버튼 → 팝업 다이얼로그로 1행 추가
     * 추가된 행은 스크롤 영역에 누적되며 각 행마다 [삭제] 버튼 보유
 - 우측 상단: 게이지 3개 (교목/관목/총합) + 숫자 표시
-- 우측 중단: 그래프 sub tab 4개 (교목 추정 / 교목 기여도 / 관목 추정 / 관목 기여도)
+- 우측 중단: 공통 연도 선택 + 교목·관목 그래프 8개 및 시각화
 - 우측 하단: 결과 테이블 (그래프 ↔ 테이블 세로 스플리터)
 """
 from __future__ import annotations
@@ -25,8 +25,8 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QMainWindow, QMessageBox, QPushButton, QScrollArea,
-    QSizePolicy, QSpinBox, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
+    QHeaderView, QInputDialog, QLabel, QMainWindow, QMessageBox, QPushButton, QScrollArea,
+    QSizePolicy, QSlider, QSpinBox, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -47,6 +47,7 @@ from .data import (
 )
 from .excel_export import export_carbon1_to_excel
 from .plotting import MatplotlibCanvas
+from .projections import project_record, assumption_note
 from .ui_scale import apply_dialog_size, pt, px
 from .widgets import (
     LinearGauge, NoWheelComboBox, NoWheelDoubleSpinBox, NoWheelSpinBox, ResultTable,
@@ -59,7 +60,7 @@ from .tree_simulation.visualization_tab import VegetationVisualizationTab
 
 # 한 행의 계산 결과 + 그래프 투영에 필요한 모든 정보를 담는 경량 컨테이너.
 # label / curve 는 계산 후 `_build_curves` 에서 채워진다.
-#   curve      : 연도축 곡선 (성장차를 가진 core 레코드만)
+#   curve      : 기존 생장량 또는 명시적 가정으로 계산한 연도축 곡선
 #   d_axis/d_curve : 직경축 곡선 (77종 전부)
 @dataclass
 class _Entry:
@@ -72,14 +73,14 @@ class _Entry:
     unit: str
     var2: Optional[float] = None   # 다변수 식의 두 번째 입력(수고·밀도·LAI·길이)
     label: str = ""
-    curve: object = None       # numpy 배열 (연도별) — core 만
+    curve: object = None       # numpy 배열 (연도별)
     d_axis: object = None      # numpy 배열 (직경축 x)
     d_curve: object = None     # numpy 배열 (직경축 탄소저장량)
 
     @property
     def supports_year_projection(self) -> bool:
-        """연도축 50년 추정이 가능한 항목인지 (성장차 보유 = core)."""
-        return self.species_data is not None and self.record.supports_year_projection
+        """연도축 추정이 가능한 항목인지."""
+        return self.record.supports_year_projection
 
 
 # 사용자 편집 가능한 (a, b, CF) 오버라이드 타입.
@@ -274,7 +275,7 @@ class AddSpeciesDialog(QDialog):
 
         v.addWidget(info_group)
 
-        # 레코드 출처·그래프 지원 기준 안내 (확장 라이브러리는 직경축만 가능).
+        # 레코드 출처·기존 또는 가정 생장률 안내.
         self.source_note_label = QLabel()
         self.source_note_label.setWordWrap(True)
         self.source_note_label.setStyleSheet(
@@ -397,11 +398,10 @@ class AddSpeciesDialog(QDialog):
             self.source_note_label.setText(
                 tr("핵심 라이브러리 수종 — 연도별·직경 기준 그래프를 모두 지원합니다."))
         else:
-            self.growth_value_label.setText(tr("제공 없음 — 직경 기준 그래프만 가능"))
+            self.growth_value_label.setText(tr("제공 없음 — 연 2% 가정 적용"))
             self.default_coeffs_label.setText(tr("식 문자열 기반 (계수 편집 불가)"))
             self.source_note_label.setText(
-                tr("확장 라이브러리 수종 — 연도별 성장차가 없어 직경 기준 그래프만 "
-                   "지원하며, 3D 시각화에는 포함되지 않습니다."))
+                tr("확장 라이브러리 수종 — 연 2% 가정 생장률로 연도별 그래프와 3D를 표시합니다."))
         self._refresh_formula()
 
     def _refresh_formula(self) -> None:
@@ -688,20 +688,12 @@ class MainWindow(QMainWindow):
         self._tree_names = list(self._tree_records.keys())
         self._shrub_names = list(self._shrub_records.keys())
 
-        # 3D 시각화는 성장차가 필요하므로 core 전용 맵을 따로 유지한다.
-        self._tree_species = lib.core_records_for_kind(lib.KIND_TREE, environment)
-        self._shrub_species = lib.core_records_for_kind(lib.KIND_SHRUB, environment)
-
-        # 추정 그래프 x축 기준 (연도별 / 직경)
-        self._tree_basis = BASIS_YEAR
-        self._shrub_basis = BASIS_YEAR
-
         self.tree_rows: List[SpeciesInputRow] = []
         self.shrub_rows: List[SpeciesInputRow] = []
 
         # 마지막 계산 결과 캐시 — Excel 저장·체크박스 범례 재렌더에 사용.
         #   _{kind}_entries : List[_Entry] (각 항목의 곡선 curve/label 포함, 계산 후 채워짐)
-        #   _{kind}_years   : 연도축 배열 (0~50) 또는 None (아직 계산 전/유효 항목 없음)
+        #   _{kind}_years   : 연도축 배열 (0~30) 또는 None (아직 계산 전/유효 항목 없음)
         #   _{kind}_checks  : 항목별 표시 체크박스 (entries 와 같은 순서)
         #   _{kind}_total_cb: "총 탄소저장량" 표시 체크박스 또는 None (항목 2개 미만이면 None)
         self._tree_entries: List[_Entry] = []
@@ -712,6 +704,8 @@ class MainWindow(QMainWindow):
         self._shrub_checks: List[QCheckBox] = []
         self._tree_total_cb: Optional[QCheckBox] = None
         self._shrub_total_cb: Optional[QCheckBox] = None
+        self._carbon_price_per_tonne = 30000.0  # Assumed KRW per tonne of carbon (tC).
+        self._displayed_total_carbon_kg = 0.0
 
         self._build_ui()
 
@@ -905,6 +899,16 @@ class MainWindow(QMainWindow):
                             self.shrub_gauge, self.shrub_value_label)
         self._add_gauge_row(gauges, 2, tr("총 탄소저장량 (kgC)"),
                             self.total_gauge, self.total_value_label)
+        self.economic_value_button = QPushButton()
+        self.economic_value_button.setFlat(True)
+        self.economic_value_button.setCursor(Qt.PointingHandCursor)
+        self.economic_value_button.setStyleSheet(
+            "QPushButton { color: #246B43; border: none; padding: 1px 4px; }"
+            "QPushButton:hover { color: #154B2D; text-decoration: underline; }"
+        )
+        self.economic_value_button.clicked.connect(self._edit_carbon_price)
+        gauges.addWidget(self.economic_value_button, 3, 2, Qt.AlignCenter)
+        self._refresh_economic_value()
         v.addLayout(gauges)
 
         # 그래프 영역: [교목 추정 / 교목 기여도 / 관목 추정 / 관목 기여도] sub tab.
@@ -918,21 +922,38 @@ class MainWindow(QMainWindow):
         self.shrub_pie_canvas = MatplotlibCanvas(width=5, height=4)
         self.shrub_pie_canvas.show_message(tr("계산 버튼을 눌러주세요"))
 
+        year_row = QHBoxLayout()
+        year_row.addWidget(QLabel("Year 0"))
+        self.year_slider = QSlider(Qt.Horizontal)
+        self.year_slider.setRange(0, 30)
+        year_row.addWidget(self.year_slider, 1)
+        year_row.addWidget(QLabel("Year 30"))
+        self.year_label = QLabel(tr("현재: 0년"))
+        year_row.addWidget(self.year_label)
+        v.addLayout(year_row)
+
         graph_tabs = QTabWidget()
         graph_tabs.setDocumentMode(True)
-        graph_tabs.addTab(self._build_estimation_tab("tree"), tr("교목 추정"))
-        graph_tabs.addTab(self._build_pie_tab("tree"), tr("교목 기여도"))
-        graph_tabs.addTab(self._build_estimation_tab("shrub"), tr("관목 추정"))
-        graph_tabs.addTab(self._build_pie_tab("shrub"), tr("관목 기여도"))
-        # 지역별 3D 시각화는 독립 모듈에 위임한다. 기존 계산/그래프 경로에는 개입하지 않는다.
+        for kind, label in (("tree", tr("교목")), ("shrub", tr("관목"))):
+            diameter_canvas = MatplotlibCanvas(width=7, height=4)
+            diameter_pie = MatplotlibCanvas(width=5, height=4)
+            setattr(self, f"{kind}_diameter_canvas", diameter_canvas)
+            setattr(self, f"{kind}_diameter_pie_canvas", diameter_pie)
+            for canvas in (diameter_canvas, diameter_pie):
+                canvas.show_message(tr("계산 버튼을 눌러주세요"))
+            graph_tabs.addTab(self._build_estimation_tab(kind), tr("{kind} 추정 (연도별)").format(kind=label))
+            graph_tabs.addTab(self._build_pie_tab(kind), tr("{kind} 기여도 (연도별)").format(kind=label))
+            graph_tabs.addTab(self._build_estimation_tab(kind, BASIS_DIAMETER), tr("{kind} 추정 (직경별)").format(kind=label))
+            graph_tabs.addTab(self._build_pie_tab(kind, BASIS_DIAMETER), tr("{kind} 기여도 (직경별)").format(kind=label))
         self.visualization_tab = VegetationVisualizationTab(
             snapshot_provider=self._build_visualization_snapshot,
             fingerprint_provider=self._visualization_fingerprint,
+            year_slider=self.year_slider,
             parent=self,
         )
         graph_tabs.addTab(self.visualization_tab, tr("시각화"))
         self._graph_tabs = graph_tabs
-        self.visualization_tab.year_changed.connect(self._on_visualization_year_changed)
+        self.year_slider.valueChanged.connect(self._on_visualization_year_changed)
         graph_tabs.currentChanged.connect(self._on_result_tab_changed)
 
         # 결과 테이블
@@ -956,74 +977,38 @@ class MainWindow(QMainWindow):
 
         return wrap
 
-    def _build_estimation_tab(self, kind: str) -> QWidget:
-        """추정 곡선 sub tab: [x축 기준 선택] + [항목별 표시 체크박스 범례] + [캔버스]."""
-        canvas = self.tree_canvas if kind == "tree" else self.shrub_canvas
-
+    def _build_estimation_tab(self, kind: str, basis: str = BASIS_YEAR) -> QWidget:
+        suffix = "" if basis == BASIS_YEAR else "_diameter"
+        canvas = getattr(self, f"{kind}{suffix}_canvas")
         wrap = QFrame()
-        wrap.setFrameShape(QFrame.StyledPanel)
         col = QVBoxLayout(wrap)
         col.setContentsMargins(2, 2, 2, 2)
-        col.setSpacing(2)
-
-        # x축 기준 선택 — 연도별(성장차 보유 수종만) / 직경(전체 수종)
-        basis_row = QHBoxLayout()
-        basis_row.setContentsMargins(4, 0, 4, 0)
-        basis_row.setSpacing(6)
-        basis_row.addWidget(QLabel(tr("그래프 기준")))
-        basis_combo = NoWheelComboBox()
-        basis_combo.addItem(tr("연도별 (향후 50년)"), BASIS_YEAR)
-        basis_combo.addItem(tr("직경별 (DBH · RCD)"), BASIS_DIAMETER)
-        basis_combo.setToolTip(
-            tr("연도별은 연간 성장차를 보유한 수종만 표시됩니다. "
-               "직경별은 유효범위를 훑어 전체 수종을 표시합니다.")
-        )
-        basis_combo.currentIndexChanged.connect(
-            lambda _i, k=kind: self._on_basis_changed(k))
-        basis_row.addWidget(basis_combo)
-        basis_note = QLabel()
-        basis_note.setStyleSheet("color: #7A5C00;")
-        basis_row.addWidget(basis_note, 1)
-        col.addLayout(basis_row)
-
-        if kind == "tree":
-            self._tree_basis_combo = basis_combo
-            self._tree_basis_note = basis_note
-        else:
-            self._shrub_basis_combo = basis_combo
-            self._shrub_basis_note = basis_note
-
-        legend_scroll = QScrollArea()
-        legend_scroll.setWidgetResizable(True)
-        legend_scroll.setFrameShape(QFrame.NoFrame)
-        legend_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        legend_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        legend_scroll.setFixedHeight(px(34))
-        legend_host = QWidget()
-        legend_layout = QHBoxLayout(legend_host)
-        legend_layout.setContentsMargins(4, 0, 4, 0)
-        legend_layout.setSpacing(px(12))
-        legend_layout.addStretch(1)
-        legend_scroll.setWidget(legend_host)
-        col.addWidget(legend_scroll)
-
-        canvas.setMinimumWidth(px(220))
+        note = QLabel()
+        note.setVisible(basis == BASIS_DIAMETER)
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #7A5C00;")
+        setattr(self, f"_{kind}{suffix}_basis_note", note)
+        col.addWidget(note)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(px(34))
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        host = QWidget()
+        legend = QHBoxLayout(host)
+        legend.addStretch(1)
+        scroll.setWidget(host)
+        col.addWidget(scroll)
         col.addWidget(canvas, 1)
-
-        if kind == "tree":
-            self._tree_legend_layout = legend_layout
-        else:
-            self._shrub_legend_layout = legend_layout
+        setattr(self, f"_{kind}{suffix}_legend_layout", legend)
+        setattr(self, f"_{kind}{suffix}_checks", [])
+        setattr(self, f"_{kind}{suffix}_total_cb", None)
         return wrap
 
-    def _build_pie_tab(self, kind: str) -> QWidget:
-        """기여도 파이 sub tab."""
-        canvas = self.tree_pie_canvas if kind == "tree" else self.shrub_pie_canvas
+    def _build_pie_tab(self, kind: str, basis: str = BASIS_YEAR) -> QWidget:
+        suffix = "" if basis == BASIS_YEAR else "_diameter"
         wrap = QFrame()
-        wrap.setFrameShape(QFrame.StyledPanel)
         col = QVBoxLayout(wrap)
-        col.setContentsMargins(2, 2, 2, 2)
-        col.addWidget(canvas, 1)
+        col.addWidget(getattr(self, f"{kind}{suffix}_pie_canvas"), 1)
         return wrap
 
     def _make_value_field(self, initial: str) -> QLabel:
@@ -1203,10 +1188,16 @@ class MainWindow(QMainWindow):
         self._build_curves("shrub", shrub_entries)
         self._build_legend("tree", tree_entries)
         self._build_legend("shrub", shrub_entries)
+        self._build_legend("tree", tree_entries, BASIS_DIAMETER)
+        self._build_legend("shrub", shrub_entries, BASIS_DIAMETER)
         self._render_projection("tree")
         self._render_projection("shrub")
         self._render_pie("tree", tree_entries)
         self._render_pie("shrub", shrub_entries)
+        self._render_pie("tree", tree_entries, BASIS_DIAMETER)
+        self._render_pie("shrub", shrub_entries, BASIS_DIAMETER)
+        self.visualization_tab.refresh_snapshot()
+        self._on_visualization_year_changed(self.year_slider.value())
 
     def on_clear(self) -> None:
         """입력 행·결과 테이블·게이지·그래프를 모두 비운다 (누적/캐시 방지)."""
@@ -1251,6 +1242,17 @@ class MainWindow(QMainWindow):
         self.shrub_canvas.show_message(tr("계산 버튼을 눌러주세요"))
         self.tree_pie_canvas.show_message(tr("계산 버튼을 눌러주세요"))
         self.shrub_pie_canvas.show_message(tr("계산 버튼을 눌러주세요"))
+
+        for kind in ("tree", "shrub"):
+            self._build_legend(kind, [], BASIS_DIAMETER)
+            getattr(self, f"_{kind}_basis_note").clear()
+            getattr(self, f"_{kind}_diameter_basis_note").clear()
+            getattr(self, f"{kind}_diameter_canvas").show_message(tr("계산 버튼을 눌러주세요"))
+            getattr(self, f"{kind}_diameter_pie_canvas").show_message(tr("계산 버튼을 눌러주세요"))
+            setattr(self, f"_{kind}_year_marker", None)
+        self.year_slider.setValue(0)
+        self.visualization_tab.refresh_snapshot()
+        self._on_visualization_year_changed(0)
 
     @staticmethod
     def _entry_to_row(e: _Entry) -> CarbonRow:
@@ -1328,6 +1330,7 @@ class MainWindow(QMainWindow):
             try:
                 lib.check_range(record, diameter)
                 carbon_kg = lib.carbon_total(record, diameter, quantity, var2)
+                project_record(record, diameter, quantity, var2)
             except LibraryError as e:
                 warnings.append(str(e))
                 continue
@@ -1336,7 +1339,7 @@ class MainWindow(QMainWindow):
             entries.append(_Entry(
                 species=species_key, record=record, species_data=species_data,
                 diameter=diameter, quantity=quantity, carbon_kg=carbon_kg,
-                unit=unit, var2=var2,
+                unit=("m" if record.predictor_short not in ("DBH", "RCD") else unit), var2=var2,
             ))
             total += carbon_kg
 
@@ -1370,6 +1373,25 @@ class MainWindow(QMainWindow):
         self.tree_value_label.setText(f"{tree:,.2f}")
         self.shrub_value_label.setText(f"{shrub:,.2f}")
         self.total_value_label.setText(f"{total:,.2f}")
+        self._displayed_total_carbon_kg = total
+        self._refresh_economic_value()
+
+    def _refresh_economic_value(self) -> None:
+        value = self._displayed_total_carbon_kg / 1000.0 * self._carbon_price_per_tonne
+        self.economic_value_button.setText(tr("경제가치: {value:,.0f}원").format(value=value))
+        self.economic_value_button.setToolTip(
+            tr("단가: {price:,.2f}원/tC · 클릭하여 수정").format(price=self._carbon_price_per_tonne)
+        )
+
+    def _edit_carbon_price(self) -> None:
+        price, accepted = QInputDialog.getDouble(
+            self, tr("탄소 단가 설정"),
+            tr("탄소 1톤(tC = 1,000 kgC)당 가격 (원)"),
+            self._carbon_price_per_tonne, 0.0, 1_000_000_000.0, 2,
+        )
+        if accepted:
+            self._carbon_price_per_tonne = price
+            self._refresh_economic_value()
 
     def _year_zero_carbon_totals(self) -> tuple[float, float, float]:
         tree = sum(e.carbon_kg for e in self._tree_entries)
@@ -1377,66 +1399,35 @@ class MainWindow(QMainWindow):
         return tree, shrub, tree + shrub
 
     def _on_visualization_year_changed(self, year: int) -> None:
-        if self._graph_tabs.currentWidget() is not self.visualization_tab:
-            return
-        snapshot = self.visualization_tab.snapshot
-        if snapshot is not None:
-            self._set_top_carbon_display(
-                *snapshot.carbon_totals_at(year), visualization_scale=True,
-            )
+        self.year_label.setText(tr("현재: {year}년").format(year=year))
+        totals = []
+        for kind in ("tree", "shrub"):
+            entries = getattr(self, f"_{kind}_entries")
+            totals.append(sum(float(e.curve[year]) for e in entries if e.curve is not None))
+            self._render_pie(kind, entries)
+            marker = getattr(self, f"_{kind}_year_marker", None)
+            if marker is not None:
+                marker.set_xdata([year, year])
+                getattr(self, f"{kind}_canvas").draw_idle()
+        self._set_top_carbon_display(*totals, sum(totals), visualization_scale=True)
 
     def _on_result_tab_changed(self, _index: int) -> None:
-        if self._graph_tabs.currentWidget() is self.visualization_tab:
-            self._on_visualization_year_changed(self.visualization_tab.year_slider.value())
-        else:
-            self._set_top_carbon_display(*self._year_zero_carbon_totals())
+        if self._graph_tabs.currentWidget() is not self.visualization_tab:
+            self.visualization_tab.pause()
+        self._on_visualization_year_changed(self.year_slider.value())
 
     def _visualization_inputs(self) -> Tuple[tuple[VisualizationInputGroup, ...], tuple[str, ...]]:
-        """현재 입력 위젯을 3D 전용 plain DTO로 복사한다.
-
-        `_Entry`나 마지막 계산 캐시에 의존하지 않으며, 기존 계산과 동일하게 범위 밖 행은
-        제외한다. 이 메서드 이후의 모든 처리는 tree_simulation 패키지가 담당한다.
-        """
-        result: list[VisualizationInputGroup] = []
-        warnings: list[str] = []
-        for kind, input_rows, species_map, unit in (
-            ("tree", self.tree_rows, self._tree_species, "cm"),
-            ("shrub", self.shrub_rows, self._shrub_species, "cm"),
-        ):
-            for input_row in input_rows:
-                species, diameter, quantity = input_row.values()
-                if quantity <= 0:
-                    continue
-                base = species_map.get(species)
-                if base is None:
-                    # 확장 라이브러리 항목 — 성장차·수형 프로필이 없어 3D 에서 제외.
-                    warnings.append(
-                        tr("{species}: 연도별 성장차가 없어 3D 시각화에서 제외됨")
-                        .format(species=species_name(species))
-                    )
-                    continue
-                if diameter < base.diameter_min or diameter > base.diameter_max:
-                    warnings.append(
-                        tr("{species}: 유효 범위 {vmin:g}~{vmax:g} {unit} 밖의 입력은 제외됨")
-                        .format(species=species_name(species), vmin=base.diameter_min,
-                                vmax=base.diameter_max, unit=unit)
-                    )
-                    continue
-                override = input_row.override_coeffs()
-                if override is None:
-                    species_data = base
-                else:
-                    a, b, cf = override
-                    species_data = replace(base, a=a, b=b, cf=cf)
-                result.append(VisualizationInputGroup(
-                    species=species,
-                    kind=kind,
-                    diameter=float(diameter),
-                    quantity=int(quantity),
-                    diameter_unit=unit,
-                    species_data=species_data,
-                ))
-        return tuple(result), tuple(warnings)
+        """Use the same accepted calculation inventory as graphs and contributions."""
+        result = tuple(
+            VisualizationInputGroup(
+                species=e.species, kind=kind, diameter=e.diameter,
+                quantity=e.quantity, diameter_unit="cm",
+                species_data=e.species_data, record=e.record, var2=e.var2,
+            )
+            for kind in ("tree", "shrub")
+            for e in getattr(self, f"_{kind}_entries")
+        )
+        return result, ()
 
     def _visualization_fingerprint(self) -> str:
         inputs, _warnings = self._visualization_inputs()
@@ -1493,21 +1484,16 @@ class MainWindow(QMainWindow):
     def _build_curves(self, kind: str, entries: List[_Entry]) -> None:
         """각 항목의 곡선과 라벨을 채운다.
 
-        - 연도축(`curve`): 성장차를 가진 core 항목만 50년 투영. 확장 라이브러리
-          항목은 성장차가 없어 None 으로 남고 연도축 그래프에서 제외된다.
+        - 연도축(`curve`): 기존 생장량 또는 연 2% 가정으로 전체 항목을 30년 투영.
         - 직경축(`d_axis`/`d_curve`): 77종 전부. 유효범위가 있으면 그 구간을,
           없으면 입력값 주변 구간을 훑는다(`species_library.diameter_axis`).
         """
         years_ref = None
         for e in entries:
-            if e.supports_year_projection:
-                years, carbon = project_future_carbon(
-                    e.species_data, e.diameter, e.quantity, years=50,
-                )
-                e.curve = carbon
-                years_ref = years
-            else:
-                e.curve = None
+            years, _predictors, e.curve = project_record(
+                e.record, e.diameter, e.quantity, e.var2,
+            )
+            years_ref = years
 
             e.d_axis = lib.diameter_axis(e.record, e.diameter)
             e.d_curve = lib.carbon_by_diameter(e.record, e.d_axis, e.quantity, e.var2)
@@ -1519,12 +1505,13 @@ class MainWindow(QMainWindow):
         else:
             self._shrub_years = years_ref
 
-    def _build_legend(self, kind: str, entries: List[_Entry]) -> None:
+    def _build_legend(self, kind: str, entries: List[_Entry], basis: str = BASIS_YEAR) -> None:
         """추정 그래프 위에 항목별 표시 체크박스 + '총 탄소저장량' 체크박스를 동적으로 구성.
 
         각 체크박스를 켜고 끄면 즉시 해당 분류의 추정 그래프가 다시 그려진다 (요구사항 2).
         """
-        layout = self._tree_legend_layout if kind == "tree" else self._shrub_legend_layout
+        suffix = "" if basis == BASIS_YEAR else "_diameter"
+        layout = getattr(self, f"_{kind}{suffix}_legend_layout")
         self._clear_layout(layout)
 
         checks: List[QCheckBox] = []
@@ -1537,7 +1524,7 @@ class MainWindow(QMainWindow):
             checks.append(cb)
 
         total_cb = None
-        if len(entries) >= 2:  # 항목이 2개 이상일 때만 총합 곡선/체크박스 제공
+        if len(entries) >= 2 and basis == BASIS_YEAR:
             total_cb = QCheckBox(tr("총 탄소저장량"))
             total_cb.setChecked(True)
             total_cb.setToolTip(tr("전체 항목 합계 곡선 표시"))
@@ -1546,34 +1533,28 @@ class MainWindow(QMainWindow):
             layout.addWidget(total_cb)
 
         layout.addStretch(1)
-        if kind == "tree":
-            self._tree_checks, self._tree_total_cb = checks, total_cb
-        else:
-            self._shrub_checks, self._shrub_total_cb = checks, total_cb
-
-    def _basis_for(self, kind: str) -> str:
-        return self._tree_basis if kind == "tree" else self._shrub_basis
-
-    def _on_basis_changed(self, kind: str) -> None:
-        """x축 기준 콤보 변경 → 해당 분류의 추정 그래프를 다시 그린다."""
-        combo = self._tree_basis_combo if kind == "tree" else self._shrub_basis_combo
-        basis = combo.currentData() or BASIS_YEAR
-        if kind == "tree":
-            self._tree_basis = basis
-        else:
-            self._shrub_basis = basis
-        self._render_projection(kind)
+        setattr(self, f"_{kind}{suffix}_checks", checks)
+        setattr(self, f"_{kind}{suffix}_total_cb", total_cb)
 
     def _render_projection(self, kind: str) -> None:
+        self._render_year_projection(kind)
+        entries = getattr(self, f"_{kind}_entries")
+        canvas = getattr(self, f"{kind}_diameter_canvas")
+        note = getattr(self, f"_{kind}_diameter_basis_note")
+        note.clear()
+        self._render_diameter_projection(
+            kind, canvas, entries, getattr(self, f"_{kind}_diameter_checks"),
+            None, tr("교목") if kind == "tree" else tr("관목"), note,
+        )
+
+    def _render_year_projection(self, kind: str) -> None:
         """범례 체크박스 상태와 x축 기준에 따라 추정 그래프를 다시 그린다.
 
         - 체크된 각 항목 → 개별 곡선.
         - '총 탄소저장량' 체크 → 전체 항목 합계 곡선(개별 체크와 독립적으로 토글).
         - 아무것도 체크되지 않으면 안내 메시지를 표시.
 
-        연도축은 성장차를 보유한 항목만 그릴 수 있으므로, 확장 라이브러리 항목이
-        섞여 있으면 제외된 개수를 축 옆 안내에 표시한다. 직경축은 전체 항목을
-        그린다.
+        가정 생장률이 적용된 항목 수를 그래프 위에 표시한다.
         """
         if kind == "tree":
             canvas, entries = self.tree_canvas, self._tree_entries
@@ -1584,27 +1565,15 @@ class MainWindow(QMainWindow):
             checks, total_cb, label_kr = self._shrub_checks, self._shrub_total_cb, tr("관목")
             years, note = self._shrub_years, self._shrub_basis_note
 
+        setattr(self, f"_{kind}_year_marker", None)
         note.setText("")
         if not entries:
             canvas.show_message(tr("{kind} 정보 없음").format(kind=label_kr))
             return
 
-        if self._basis_for(kind) == BASIS_DIAMETER:
-            self._render_diameter_projection(kind, canvas, entries, checks, total_cb,
-                                            label_kr, note)
-            return
-
-        # ----- 연도축 (성장차 보유 항목만) -----
-        plottable = [(e, cb) for e, cb in zip(entries, checks)
-                     if e.supports_year_projection]
-        skipped = len(entries) - len(plottable)
-        if skipped:
-            note.setText(tr("성장차 없는 {n}개 항목은 연도별에서 제외 (직경별로 확인)")
-                         .format(n=skipped))
+        plottable = list(zip(entries, checks))
         if years is None or not plottable:
-            canvas.show_message(
-                tr("연도별 추정이 가능한 항목이 없습니다.\n"
-                   "그래프 기준을 [직경별]로 바꾸면 전체 항목을 볼 수 있습니다."))
+            canvas.show_message(tr("{kind} 정보 없음").format(kind=label_kr))
             return
 
         series: list = []
@@ -1627,9 +1596,12 @@ class MainWindow(QMainWindow):
         # 제목은 패널 상단 라벨로 표시하므로 축 제목은 끈다 (그래프 영역 확보).
         canvas.plot_multi_projection(
             series,
-            tr("[{kind}] 향후 50년 탄소저장량 변동 추정").format(kind=label_kr),
+            tr("[{kind}] 향후 30년 탄소저장량 변동 추정").format(kind=label_kr),
             show_title=False,
         )
+        marker = canvas.ax.axvline(self.year_slider.value(), color="#C0392B", linestyle="--")
+        setattr(self, f"_{kind}_year_marker", marker)
+        canvas.draw_idle()
 
     def _render_diameter_projection(self, kind: str, canvas, entries: List[_Entry],
                                     checks: List[QCheckBox], total_cb, label_kr: str,
@@ -1674,11 +1646,12 @@ class MainWindow(QMainWindow):
             show_title=False,
         )
 
-    def _render_pie(self, kind: str, entries: List[_Entry]) -> None:
+    def _render_pie(self, kind: str, entries: List[_Entry], basis: str = BASIS_YEAR) -> None:
         """수종별 탄소저장량 기여도 파이차트를 그린다 (기여도 sub tab)."""
-        canvas = self.tree_pie_canvas if kind == "tree" else self.shrub_pie_canvas
+        suffix = "" if basis == BASIS_YEAR else "_diameter"
+        canvas = getattr(self, f"{kind}{suffix}_pie_canvas")
         label_kr = tr("교목") if kind == "tree" else tr("관목")
-        values = [e.carbon_kg for e in entries]
+        values = [float(e.curve[self.year_slider.value()]) if basis == BASIS_YEAR and e.curve is not None else e.carbon_kg for e in entries]
         if not entries or sum(values) <= 0:
             canvas.show_message(tr("[{kind}]\n기여도 없음").format(kind=label_kr))
             return
@@ -1748,10 +1721,10 @@ class MainWindow(QMainWindow):
     def _render_graph_images(self) -> list:
         """현재 4개 그래프(교목/관목 × 추정/기여도)를 PNG 바이트로 렌더 → Excel 임베드용."""
         specs = [
-            (tr("교목 향후 50년 탄소저장량 변동 추정"), self.tree_canvas),
-            (tr("교목 수종별 기여도"), self.tree_pie_canvas),
-            (tr("관목 향후 50년 탄소저장량 변동 추정"), self.shrub_canvas),
-            (tr("관목 수종별 기여도"), self.shrub_pie_canvas),
+            (tr("교목 향후 30년 탄소저장량 변동 추정"), self.tree_canvas),
+            (tr("교목 수종별 기여도"), self.tree_diameter_pie_canvas),
+            (tr("관목 향후 30년 탄소저장량 변동 추정"), self.shrub_canvas),
+            (tr("관목 수종별 기여도"), self.shrub_diameter_pie_canvas),
         ]
         images = []
         for title, canvas in specs:
@@ -1807,13 +1780,14 @@ class MainWindow(QMainWindow):
                 "dmin": e.record.range_min, "dmax": e.record.range_max,
                 "equation": e.record.equation,
                 "source": e.record.source,
+                "growth_assumption": assumption_note(e.record),
             }
             for i, e in enumerate(entries)
         ]
         total_qty = sum(e.quantity for e in entries)
 
         projection = None
-        # 연도축 시계열은 성장차를 보유한 항목만 기록한다.
+        # 기존 생장량과 가정 생장률을 포함한 전체 연도축 시계열.
         year_entries = [(i, e) for i, e in enumerate(entries) if e.curve is not None]
         if years is not None and year_entries:
             # 저장 파일에는 '총 탄소저장량'(연도축 항목 합)을 기록 — 2개 이상일 때만.

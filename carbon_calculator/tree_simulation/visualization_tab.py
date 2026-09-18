@@ -31,8 +31,9 @@ class VegetationVisualizationTab(QWidget):
     def snapshot(self) -> RegionVisualizationSnapshot | None:
         return self._snapshot
     def __init__(self, snapshot_provider: SnapshotProvider,
-                 fingerprint_provider: FingerprintProvider, parent=None):
+                 fingerprint_provider: FingerprintProvider, year_slider: QSlider, parent=None):
         super().__init__(parent)
+        self.year_slider = year_slider
         self._snapshot_provider = snapshot_provider
         self._fingerprint_provider = fingerprint_provider
         self._snapshot: RegionVisualizationSnapshot | None = None
@@ -79,14 +80,10 @@ class VegetationVisualizationTab(QWidget):
         self.pause_btn.clicked.connect(self.pause)
         self.refresh_btn.clicked.connect(self.refresh_snapshot)
         row.addWidget(self.play_btn); row.addWidget(self.pause_btn)
-        row.addWidget(QLabel("Year 0"))
-        self.year_slider = QSlider(Qt.Horizontal)
-        self.year_slider.setRange(0, 50)
         self.year_slider.valueChanged.connect(self._on_year_changed)
-        row.addWidget(self.year_slider, 1)
-        row.addWidget(QLabel("Year 50"))
         self.year_label = QLabel(tr("현재: 0년"))
         row.addWidget(self.year_label)
+        row.addStretch(1)
         row.addWidget(self.refresh_btn)
         root.addWidget(controls)
 
@@ -98,19 +95,10 @@ class VegetationVisualizationTab(QWidget):
         root.addWidget(self.summary_label)
 
         self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet("color: #B05A2B; padding: 1px 4px;")
+        self.status_label.hide()
         root.addWidget(self.status_label)
-
-        note = QLabel(
-            tr("DBH/RCD 성장과 탄소저장량은 현재 프로젝트의 수종별 데이터를 사용합니다. "
-            "수고, 수관 크기 및 풍성함은 현재 제공된 실측/생장식 데이터가 없어 "
-            "3D 표현을 위한 기본 시각화 모델을 사용합니다. "
-            "단순 3D 형상에서 식별하기 쉽도록 줄기 굵기는 화면 표시용으로 보정됩니다. "
-            "Year 0은 현재 입력 상태입니다.")
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #6B7780; font-size: 10px; padding: 2px 4px;")
-        root.addWidget(note)
 
     def refresh_snapshot(self) -> None:
         self.pause()
@@ -119,6 +107,7 @@ class VegetationVisualizationTab(QWidget):
         except Exception as exc:  # 사용자에게 3D 계층 오류를 알리고 기존 앱은 유지
             self.status_label.setText(
                 tr("시각화 갱신 실패: {error}").format(error=exc))
+            self.status_label.show()
             return
         self._snapshot = snapshot
         self.region_label.setText(
@@ -134,14 +123,13 @@ class VegetationVisualizationTab(QWidget):
             self.renderer.clear()
             self.plotter.add_text(tr("표시할 유효 교목/관목 입력이 없습니다."), position="upper_left")
             self.status_label.setText(tr("항목을 추가한 뒤 계산하거나 새로고침하세요."))
+            self.status_label.show()
         else:
             self.plotter.clear_actors()
             self.renderer.set_snapshot(snapshot)
-            self.status_label.setText(" · ".join(snapshot.warnings))
-        self.year_slider.blockSignals(True)
-        self.year_slider.setValue(0)
-        self.year_slider.blockSignals(False)
-        self._on_year_changed(0)
+            self.status_label.clear()
+            self.status_label.hide()
+        self._on_year_changed(self.year_slider.value())
 
     def _check_stale(self) -> None:
         if not self.isVisible():
@@ -214,7 +202,7 @@ class VegetationVisualizationTab(QWidget):
     def play(self) -> None:
         if self._snapshot is None:
             self.refresh_snapshot()
-        if self.year_slider.value() >= 50:
+        if self.year_slider.value() >= 30:
             self.year_slider.setValue(0)
         self._play_timer.start()
 
@@ -224,17 +212,21 @@ class VegetationVisualizationTab(QWidget):
 
     def _advance_year(self) -> None:
         value = self.year_slider.value()
-        if value >= 50:
+        if value >= 30:
             self.pause()
             return
         next_value = value + 1
         self.year_slider.setValue(next_value)
-        if next_value >= 50:
+        if next_value >= 30:
             self.pause()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._check_stale()
+
+    def hideEvent(self, event) -> None:
+        self.pause()
+        super().hideEvent(event)
 
     def closeEvent(self, event) -> None:
         self.pause()

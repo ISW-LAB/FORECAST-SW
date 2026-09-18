@@ -1,5 +1,7 @@
 # FORECAST-SW
 
+The current UI provides nine tabs: yearly projection/contribution and diameter projection/contribution for trees and shrubs, plus 3D visualization. A shared year bar synchronizes years 0–30. Records without growth increments use an assumed 2% annual predictor increase; see [growth assumptions](GROWTH_ASSUMPTIONS.md). Paper figures below show the earlier UI.
+
 **Carbon-stock assessment and growth scenario analysis for forest restoration plantings**
 
 **English** · [한국어](README.ko.md)
@@ -39,13 +41,13 @@ Python + PyQt5 for Windows. NumPy (computation), Matplotlib (2D plots), openpyxl
 
 | Stage | Component | Core content |
 |:---:|---|---|
-| **1** | Library Manager | Define equations and parameters across four collections — coefficients, carbon fraction, fitted range, three period-specific increments (years 1–10 / 11–20 / 21–50) |
+| **1** | Library Manager | Define equations and parameters across four collections — coefficients, carbon fraction, fitted range, three period-specific increments (years 1–10 / 11–20 / 21–30) |
 | **2** | Library Manager | Validate identifiers, duplicates, coefficients, range ordering, and expressions → save as JSON |
 | **3** | Library Manager | Application loads the validated user library at startup; default release library kept as fallback |
 | **4** | Assessment App | Enter site info and species / diameter / represented count. DBH and RCD entered in cm, converted to equation-native units; record-specific overrides available |
 | **5** | Assessment App | Entry- and calculation-level validation + planting-area safeguard |
 | **6** | Assessment App | Shared engine evaluates each accepted record → aggregate by species and site → carbon density |
-| **7** | Assessment App | 0–50-year scenarios projected from the stored increments, evaluated by the **same engine** as current stock |
+| **7** | Assessment App | 0–30-year scenarios projected from the stored increments, evaluated by the **same engine** as current stock |
 | **8** | Assessment App | 2D plots, optional 3D views, cross-site comparison, XLSX export |
 
 ---
@@ -66,7 +68,7 @@ All 77 records are selectable in the site-assessment screen. Each record is file
 
 #### Table 2. Representative allometric equation records from the FORECAST-SW tree and shrub collections, including predictor definitions, fitted diameter ranges, and period-specific growth increments
 
-| Scientific name | Allometric equation | Predictor | Fitted range | 1–10 | 11–20 | 21–50 |
+| Scientific name | Allometric equation | Predictor | Fitted range | 1–10 | 11–20 | 21–30 |
 |---|---|:---:|:---:|---:|---:|---:|
 | ***Tree collection*** | | | | | | |
 | *Pinus densiflora* | `Y = 0.0737·X^2.5735` | DBH | 1–15 cm | 0.11 | 0.20 | 0.70 |
@@ -85,17 +87,17 @@ All 77 records are selectable in the site-assessment screen. Each record is file
 - `X` = DBH for trees, RCD for shrubs, in cm. Shrub equations fitted in mm are written as **`10X`**, with fitted limits converted to cm — the original relationship is preserved without refitting.
 - **Every species stores one record per site category**, and the application applies exactly the record for the selected category — there is no category-independent base equation (`SiteCategoryTests`). All four collections use the same `by_env` shape, keyed by the three categories.
 - Records that the sources actually differentiate carry different values: *Pinus densiflora* uses sheet rows 1 / 2 / 3 for the three categories. Every other species is initialized identically across the three and can be differentiated in the Manager as evidence becomes available.
-- **A growth factor** is applied on top of the selected record's annual diameter increments, held per category and growth form (default `1.0` = no adjustment), with an optional per-species override. It scales the 50-year scenario only; the equation is untouched, so year-0 stock does not move.
+- **A growth factor** is applied on top of the selected record's annual diameter increments, held per category and growth form (default `1.0` = no adjustment), with an optional per-species override. It scales the 30-year scenario only; the equation is untouched, so year-0 stock does not move.
 - Full inventory: [`species_data.json`](species_data.json).
 
 #### Graph bases
 
 The estimation panel plots carbon stock against either axis, selected per tab:
 
-- **By year** — the 50-year scenario. It requires published annual diameter increments, so it covers the **22** core records; entries from the other 55 are listed as omitted with a pointer to the diameter basis. No growth rate is substituted for a record that does not publish one.
+- **By year** — the 30-year scenario. All **77** records are included: 22 use stored increments and 55 use the explicitly assumed 2% annual predictor increase.
 - **By diameter** — carbon across the predictor axis, available for **all 77** records. Each curve spans that record's fitted range; the **20** records whose sources publish no domain are swept over a band around the entered value and flagged as such. Curves are not summed on this basis because records have different domains.
 
-Records from the extension collections contribute to the site totals, the planting-area guard (whose per-individual areas are defined per growth form, not per species), and the Excel export. Each result table also reports the core and extension subtotals separately, so the 22-record figures remain readable. The 3D view still covers only the 22 core records, since it needs the growth increments.
+Records from the extension collections contribute to the site totals, the planting-area guard (whose per-individual areas are defined per growth form, not per species), and the Excel export. Each result table also reports the core and extension subtotals separately, so the 22-record figures remain readable. The 3D view includes all 77 records, using the same stored or assumed growth as the yearly graphs.
 
 ---
 
@@ -112,7 +114,7 @@ A_required = 1.00 · Σ n_i(trees) + 0.25 · Σ n_i(shrubs)                … E
 ρ_C(t) = C_site(t) / A_site                                            … Eq. (3)
 
 D_i(t) = D_i(0) + Σ_{s=1..t} g_i,p(s)                                  … Eq. (4)
-         p(s) = 1 (1–10 yr) · 2 (11–20 yr) · 3 (21–50 yr)
+         p(s) = 1 (1–10 yr) · 2 (11–20 yr) · 3 (21–30 yr)
 
 v_i(t) = 1 if D_min,i ≤ D_i(t) ≤ D_max,i, else 0                       … Eq. (5)
 ```
@@ -128,7 +130,7 @@ v_i(t) = 1 if D_min,i ≤ D_i(t) ≤ D_max,i, else 0                       … E
 - `q_i` belongs to the equation record, so overrides (`a_i`, `b_i`, `CF_i`) never change it.
 - Eq. (3): total stock is **independent of site area**; density varies **inversely** with it.
 - Eq. (5) runs **after** calculation and only flags extrapolation — it never alters trajectories.
-- Domestic/international records use `Y_i = f_i(X_i, H_i)` via an AST allowlist (no Python `eval`). Storing no carbon fraction or increments, they apply a fixed **CF₀ = 0.5** and are excluded from the year-based scenario — they are plotted on the diameter basis instead.
+- Domestic/international records use `Y_i = f_i(X_i, H_i)` via an AST allowlist (no Python `eval`). Storing no carbon fraction or increments, they apply a fixed **CF₀ = 0.5** and use X(t) = X(0) × 1.02^t for the assumed year-based scenario, holding H fixed. Diameter-basis graphs remain available.
 
 ---
 
@@ -191,6 +193,8 @@ Designed to separate variation from **inventory composition** from that introduc
 <p align="center">
   <img src="figures/paper/fig5_growth_scenario.png" alt="Deterministic growth scenario for Profile 1" width="100%">
 </p>
+
+The software now displays years 0–30 in graphs and 3D visualization. Figure 5 and its table below retain the original 50-year scenario as a paper example.
 
 > **Figure 5.** Deterministic growth scenario for Profile 1 at years 0, 20, and 50, showing tree, shrub, and total carbon stocks together with the corresponding 3D stand visualization.
 

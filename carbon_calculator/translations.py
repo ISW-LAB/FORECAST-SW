@@ -305,7 +305,7 @@ EN: dict[str, str] = {
 
     # ── 추정 그래프 x축 기준 (연도별 / 직경별) ──
     "그래프 기준": "Graph basis",
-    "연도별 (향후 50년)": "By year (next 50 years)",
+    "연도별 (향후 30년)": "By year (next 30 years)",
     "직경별 (DBH · RCD)": "By diameter (DBH · RCD)",
     "연도별은 연간 성장차를 보유한 수종만 표시됩니다. "
     "직경별은 유효범위를 훑어 전체 수종을 표시합니다.":
@@ -359,8 +359,8 @@ EN: dict[str, str] = {
     "{kind} 정보 없음": "No {kind} data",
     "{kind}: 표시할 항목을 선택하세요 (그래프 위 체크박스)":
         "{kind}: select entries to display using the checkboxes above the figure",
-    "[{kind}] 향후 50년 탄소저장량 변동 추정":
-        "[{kind}] Projected carbon storage over 50 years",
+    "[{kind}] 향후 30년 탄소저장량 변동 추정":
+        "[{kind}] Projected carbon storage over 30 years",
     "[{kind}]\n기여도 없음": "[{kind}]\nNo contribution data",
     "{kind} 수종별 기여도": "{kind} contribution by species",
 
@@ -431,10 +431,10 @@ EN: dict[str, str] = {
     "지역별 총량 및 면적 정규화 비교":
         "Total and area-normalized carbon comparison by site",
     "── {name} 지역 ──": "── Site: {name} ──",
-    "교목 향후 50년 탄소저장량 변동 추정":
-        "Projected tree carbon storage over 50 years",
-    "관목 향후 50년 탄소저장량 변동 추정":
-        "Projected shrub carbon storage over 50 years",
+    "교목 향후 30년 탄소저장량 변동 추정":
+        "Projected tree carbon storage over 30 years",
+    "관목 향후 30년 탄소저장량 변동 추정":
+        "Projected shrub carbon storage over 30 years",
     "교목 수종별 기여도": "Tree contribution by species",
     "관목 수종별 기여도": "Shrub contribution by species",
 
@@ -547,3 +547,22 @@ def _load_json_overrides() -> None:
 
 
 _load_json_overrides()
+
+
+EN.update({
+    "{kind} 추정 (연도별)": "{kind} projection (by year)",
+    "{kind} 기여도 (연도별)": "{kind} contribution (by year)",
+    "{kind} 추정 (직경별)": "{kind} projection (by diameter)",
+    "{kind} 기여도 (직경별)": "{kind} contribution (by diameter)",
+    "입력한 직경 기준의 기여도 (연도 선택과 무관)": "Contribution at entered diameters (independent of selected year)",
+    "가정 생장률 적용: {n}개 항목 · 연 2% · GROWTH_ASSUMPTIONS.md": "Assumed growth: {n} entries · 2% per year · GROWTH_ASSUMPTIONS.md",
+})
+
+EN.update({
+    "제공 없음 — 연 2% 가정 적용": "Not provided — assumed 2% annual growth",
+    "확장 라이브러리 수종 — 연 2% 가정 생장률로 연도별 그래프와 3D를 표시합니다.": "Extension species — yearly graphs and 3D use assumed 2% annual growth.",
+    "경제가치: {value:,.0f}원": "Value: KRW {value:,.0f}",
+    "단가: {price:,.2f}원/tC · 클릭하여 수정": "Price: KRW {price:,.2f}/tC · Click to edit",
+    "탄소 단가 설정": "Carbon price",
+    "탄소 1톤(tC = 1,000 kgC)당 가격 (원)": "Price per tonne of carbon (tC = 1,000 kgC), KRW",
+})

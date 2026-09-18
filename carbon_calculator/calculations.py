@@ -140,7 +140,7 @@ def weighted_average_diameter(rows: Iterable[CarbonRow]) -> float:
 def project_future_carbon(species_data: SpeciesData,
                           starting_diameter: float,
                           total_quantity: int,
-                          years: int = 50) -> tuple[np.ndarray, np.ndarray]:
+                          years: int = 30) -> tuple[np.ndarray, np.ndarray]:
     """
     cm 단위의 starting_diameter부터 매년 cm 성장률을 더해 총 탄소량 변동 계산.
 

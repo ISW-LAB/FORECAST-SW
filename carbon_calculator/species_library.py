@@ -1,24 +1,7 @@
 # SPDX-License-Identifier: MIT
 # -*- coding: utf-8 -*-
-"""상대생장식 라이브러리 77개 레코드를 단일 인터페이스로 제공하는 통합 계층.
-
-성격이 다른 두 레코드 집합을 하나의 `LibraryRecord` 로 감싸서, 평가 화면이
-수종의 출처를 구분하지 않고 동일한 방식으로 다룰 수 있게 한다.
-
-* **core (22종)** — `data.TREE_BASE` · `data.SHRUB_SPECIES`
-  계수 `a, b, CF` + 유효범위 + **연도별 성장차**를 보유한다.
-  → 연도축 50년 추정과 3D 시각화까지 지원.
-* **extension (55종)** — `data2.DOMESTIC_SPECIES` · `data2.FOREIGN_SPECIES`
-  평가식 문자열 + (일부만) 유효범위를 보유하며 **성장차가 없다**.
-  → 연도축 추정은 불가능하고 **직경축 추정만** 지원.
-
-교목/관목 분류는 **첫 번째 설명변수**를 기준으로 한다 — 변수가 RCD 인 레코드는
-관목, 그 외(DBH 등)는 교목이다. 설명변수가 DBH·RCD 둘 다 아닌 레코드는
-`KIND_OVERRIDES` 에 명시해 분류를 고정한다(현재 1건).
-
-성장차가 없는 레코드에 임의의 성장률을 부여하지 않는다 — 출처 없는 수치로
-시나리오 곡선을 그리지 않기 위한 결정이며, 그런 레코드는
-`supports_year_projection` 이 False 이고 직경축으로만 표현된다.
+"""Unified equation library. Missing growth uses the explicit assumptions in
+GROWTH_ASSUMPTIONS.md through the shared projections module.
 """
 from __future__ import annotations
 
@@ -115,8 +98,8 @@ class LibraryRecord:
 
     @property
     def supports_year_projection(self) -> bool:
-        """연도별 성장차를 보유해 50년 추정을 그릴 수 있는지."""
-        return self.is_core
+        """기존 생장량 또는 명시적 가정으로 연도별 추정이 가능한지."""
+        return self.species_data is not None or self.equation is not None
 
     # ----- 표시용 -----
 

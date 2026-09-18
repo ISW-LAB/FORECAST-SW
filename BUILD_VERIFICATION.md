@@ -1,7 +1,10 @@
 # FORECAST-SW v1.0 build verification
 
 Build and artifact verification: 2026-09-07 (Asia/Seoul)
-Test suite re-verified: 2026-09-11 (Asia/Seoul)
+Test suite re-verified: 2026-09-18 (Asia/Seoul), Python 3.13.5
+
+The executable and installer checks below describe the earlier build; they
+have not been repeated for the shared-year UI changes.
 
 ## Environment
 
@@ -13,17 +16,24 @@ Test suite re-verified: 2026-09-11 (Asia/Seoul)
 
 ## Checks performed
 
-1. `python -m unittest discover -s tests -v`: 40 tests passed, including the
+1. `python -m unittest discover -s tests -v`: 46 tests passed, including the
    shared-centimeter DBH/RCD contract, legacy shrub-equation equivalence,
    combined planting-area boundary and over-limit cases, area-normalized
    carbon density, normalized-density values exported to XLSX, the unified
    77-record species library (growth-form assignment from the predictor
-   variable, year-basis projection restricted to the 22 records that publish
-   growth increments, and a finite diameter-basis curve for every record), and
+   variable, 30-year projections for 22 records with stored increments plus
+   55 records with explicit 2% annual assumptions, and a finite diameter-basis
+   curve for every record), and
    site-category resolution (every species stores one record per category with
    no category-independent base, published per-category equations for
    *Pinus densiflora*, and a growth factor that scales annual increments on top
    of the selected record without moving year-0 stock).
+   Additional checks cover graph/3D/inspection carbon parity, auxiliary-variable
+   fingerprint changes, nine tabs, the shared year slider, fixed diameter
+   contributions, recalculation, playback at year 30, and clearing results.
+   The UI test uses real Qt controls and Matplotlib with the GPU renderer mocked.
+   Updater output-name validation and custom EXE copying in onefile/onedir modes
+   are tested with the PyInstaller subprocess mocked.
    The count above is checked by the suite itself: the test
    `test_build_verification_records_the_current_suite_size` discovers the tests
    at run time and fails if this document and the suite disagree, so adding or

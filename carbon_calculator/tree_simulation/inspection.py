@@ -29,18 +29,22 @@ class InstanceInspection:
     profile_shape: str
     profile_color: str
     group_quantity: int
-    a: float
-    b: float
+    a: float | None
+    b: float | None
     cf: float
     growth_y10: float
     growth_y20: float
     growth_y21: float
+    scenario_note: str = ""
+    formula: str = ""
+    predictor_label: str = ""
+    predictor_value: float = 0.0
 
 
 def inspect_instance(snapshot: RegionVisualizationSnapshot, instance_id: int,
                      year: int) -> InstanceInspection | None:
     """그룹 총 탄소량을 수량으로 나눠 선택한 1주의 탄소량을 반환한다."""
-    year = max(0, min(50, int(year)))
+    year = max(0, min(30, int(year)))
     instance = next((i for i in snapshot.instances if i.instance_id == instance_id), None)
     if instance is None:
         return None
@@ -72,4 +76,8 @@ def inspect_instance(snapshot: RegionVisualizationSnapshot, instance_id: int,
         growth_y10=group.growth_y10,
         growth_y20=group.growth_y20,
         growth_y21=group.growth_y21,
+        scenario_note=group.scenario_note,
+        formula=group.formula,
+        predictor_label=group.predictor_label,
+        predictor_value=float(group.predictor_by_year[year]) if group.predictor_by_year is not None else float(group.diameter_by_year[year]),
     )

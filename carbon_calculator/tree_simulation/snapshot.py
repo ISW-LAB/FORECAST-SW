@@ -8,6 +8,8 @@ import json
 import numpy as np
 
 from ..calculations import project_future_carbon
+from ..data2 import CARBON_FACTOR
+from ..projections import project_record, assumption_note
 from .growth_models import diameter_timeline
 from .models import (
     RegionVisualizationSnapshot, VegetationGroup, VisualizationInputGroup,
@@ -26,11 +28,7 @@ def input_fingerprint(region_name: str, environment: str, area_w: float, area_h:
             [
                 item.species, item.kind, item.diameter, item.quantity,
                 item.diameter_unit,
-                item.species_data.a, item.species_data.b, item.species_data.cf,
-                item.species_data.diameter_min, item.species_data.diameter_max,
-                item.species_data.equation_diameter_unit,
-                item.species_data.growth_y10, item.species_data.growth_y20,
-                item.species_data.growth_y21,
+                repr(item.species_data), repr(item.record), item.var2,
             ]
             for item in inputs
         ],
@@ -44,28 +42,42 @@ def build_snapshot(*, region_name: str, environment: str, area_w: float, area_h:
                    warnings: tuple[str, ...] = ()) -> RegionVisualizationSnapshot:
     groups: list[VegetationGroup] = []
     for group_id, item in enumerate(inputs):
-        years, carbon = project_future_carbon(
-            item.species_data, item.diameter, item.quantity, years=50,
-        )
-        diameters = diameter_timeline(
-            item.species_data, item.diameter, years=50,
-        )
+        record = item.record
+        note = assumption_note(record) if record is not None else ""
+        if record is not None:
+            years, predictors, carbon = project_record(
+                record, item.diameter, item.quantity, item.var2,
+            )
+            diameters = predictors.copy()
+            if record.predictor_short not in ("DBH", "RCD"):
+                # Height/LAI equations have no measured diameter: geometry-only proxy.
+                diameters = 1.5 * predictors / item.diameter
+                note += "; 3D diameter proxy: 1.5 cm × X(t)/X(0)"
+        else:
+            years, carbon = project_future_carbon(item.species_data, item.diameter, item.quantity)
+            diameters = diameter_timeline(item.species_data, item.diameter)
+            predictors = diameters
+        sp = item.species_data
         groups.append(VegetationGroup(
             group_id=group_id,
             species=item.species,
             kind=item.kind,
             quantity=item.quantity,
-            initial_diameter=item.diameter,
+            initial_diameter=float(diameters[0]),
             diameter_unit=item.diameter_unit,
             diameter_by_year=diameters,
             carbon_by_year_kgc=carbon,
             profile_key=profile_for(item.species, item.kind).key,
-            a=item.species_data.a,
-            b=item.species_data.b,
-            cf=item.species_data.cf,
-            growth_y10=item.species_data.growth_y10,
-            growth_y20=item.species_data.growth_y20,
-            growth_y21=item.species_data.growth_y21,
+            a=getattr(sp, "a", None),
+            b=getattr(sp, "b", None),
+            cf=getattr(sp, "cf", CARBON_FACTOR),
+            growth_y10=getattr(sp, "growth_y10", 0.0),
+            growth_y20=getattr(sp, "growth_y20", 0.0),
+            growth_y21=getattr(sp, "growth_y21", 0.0),
+            scenario_note=note,
+            formula=record.formula_text() if record is not None else "",
+            predictor_label=record.var1_label if record is not None else "",
+            predictor_by_year=predictors,
         ))
 
     group_tuple = tuple(groups)
@@ -73,7 +85,7 @@ def build_snapshot(*, region_name: str, environment: str, area_w: float, area_h:
         region_name, environment, area_w, area_h, group_tuple,
     )
     instances = place_instances(group_tuple, area_w, area_h, seed)
-    total = np.zeros(51, dtype=float)
+    total = np.zeros(31, dtype=float)
     for group in group_tuple:
         total += group.carbon_by_year_kgc
     fingerprint = input_fingerprint(region_name, environment, area_w, area_h, inputs)
@@ -84,11 +96,11 @@ def build_snapshot(*, region_name: str, environment: str, area_w: float, area_h:
         environment=environment,
         area_w=float(area_w),
         area_h=float(area_h),
-        years=np.arange(51, dtype=int),
+        years=np.arange(31, dtype=int),
         groups=group_tuple,
         instances=instances,
         total_carbon_by_year_kgc=total,
         placement_seed=seed,
         input_fingerprint=fingerprint,
-        warnings=warnings,
+        warnings=tuple(dict.fromkeys((*warnings, *(g.scenario_note for g in groups if g.scenario_note)))),
     )

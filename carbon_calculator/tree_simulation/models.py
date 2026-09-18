@@ -17,6 +17,8 @@ class VisualizationInputGroup:
     quantity: int
     diameter_unit: Literal["cm"]
     species_data: object
+    record: object = None
+    var2: float | None = None
 
 
 ModelStatus = Literal["existing_project_data", "visual_fallback"]
@@ -41,12 +43,16 @@ class VegetationGroup:
     diameter_by_year: np.ndarray
     carbon_by_year_kgc: np.ndarray
     profile_key: str
-    a: float
-    b: float
+    a: float | None
+    b: float | None
     cf: float
     growth_y10: float
     growth_y20: float
     growth_y21: float
+    scenario_note: str = ""
+    formula: str = ""
+    predictor_label: str = ""
+    predictor_by_year: object = None
 
 
 @dataclass(frozen=True)
@@ -98,7 +104,7 @@ class RegionVisualizationSnapshot:
         return sum(g.quantity for g in self.groups if g.kind == "shrub")
 
     def carbon_totals_at(self, year: int) -> tuple[float, float, float]:
-        year = max(0, min(50, int(year)))
+        year = max(0, min(30, int(year)))
         tree = sum(float(g.carbon_by_year_kgc[year]) for g in self.groups if g.kind == "tree")
         shrub = sum(float(g.carbon_by_year_kgc[year]) for g in self.groups if g.kind == "shrub")
         return tree, shrub, tree + shrub

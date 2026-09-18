@@ -56,6 +56,10 @@ _SETTINGS_APP = "CarbonStorageModule"
 _SETTINGS_KEY = "language"
 
 _EN: dict[str, str] = {
+    "EXE 파일 이름": "EXE file name",
+    "사용할 EXE 파일 이름을 입력하세요.": "Enter the output EXE file name.",
+    "파일 이름에는 경로 또는 특수문자를 사용할 수 없습니다.": "The file name cannot contain a path or invalid characters.",
+    "사용할 수 없는 파일 이름입니다.": "This file name is not allowed.",
     "수종 데이터 업데이터 (자체 완결형) - FORECAST-SW v{version}":
         "FORECAST-SW Equation Library Manager (self-contained, v{version})",
     "수종 데이터 JSON (통합 species_data.json)":
@@ -591,16 +595,35 @@ def _validate_species_json(path: Path) -> tuple[bool, str]:
 
 # ─────────────────────────── 빌드 워커 ───────────────────────────
 
+def _normalize_exe_name(value: str) -> str:
+    """Accept a Windows basename, with an optional .exe extension."""
+    name = value.strip()
+    if not name:
+        raise ValueError(tr("사용할 EXE 파일 이름을 입력하세요."))
+    if any(c in '<>:"/\\|?*' or ord(c) < 32 for c in name):
+        raise ValueError(tr("파일 이름에는 경로 또는 특수문자를 사용할 수 없습니다."))
+    stem = name[:-4] if name.lower().endswith(".exe") else name
+    reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    reserved.update(f"{prefix}{i}" for prefix in ("COM", "LPT") for i in "123456789¹²³")
+    if (not stem or stem.endswith((".", " "))
+            or stem.split(".")[0].upper() in reserved
+            or len((stem + ".exe").encode("utf-16-le")) // 2 > 255):
+        raise ValueError(tr("사용할 수 없는 파일 이름입니다."))
+    return stem + ".exe"
+
+
 class BuildWorker(QThread):
     """임시 작업폴더 구성 → build_exe.py 실행 → 산출물 복사 를 백그라운드로 수행."""
     log_line = pyqtSignal(str)
     finished = pyqtSignal(bool, str)   # (성공여부, 산출물 경로 또는 오류메시지)
 
-    def __init__(self, json_path: Path, out_dir: Path, options: list[str]):
+    def __init__(self, json_path: Path, out_dir: Path, options: list[str],
+                 exe_name: str = MAIN_EXE_NAME):
         super().__init__()
         self.json_path = json_path
         self.out_dir = out_dir
         self.options = options
+        self.exe_name = _normalize_exe_name(exe_name)
 
     def _emit(self, msg: str):
         self.log_line.emit(msg)
@@ -673,13 +696,15 @@ class BuildWorker(QThread):
             self._emit(tr("[4/4] 산출물 복사 → {path}").format(path=self.out_dir))
 
             if onedir:
-                dest = self.out_dir / MAIN_APP_NAME
+                dest = self.out_dir / Path(self.exe_name).stem
                 if dest.exists():
                     shutil.rmtree(dest, ignore_errors=True)
                 shutil.copytree(produced, dest)
-                final = dest / MAIN_EXE_NAME
+                final = dest / self.exe_name
+                if final.name != MAIN_EXE_NAME:
+                    (dest / MAIN_EXE_NAME).rename(final)
             else:
-                final = self.out_dir / MAIN_EXE_NAME
+                final = self.out_dir / self.exe_name
                 shutil.copy2(produced, final)
 
             self.finished.emit(True, str(final))
@@ -1544,7 +1569,7 @@ class UpdaterWindow(QMainWindow):
     def _rebuild_ui(self) -> None:
         """중앙 위젯을 새로 만들되 입력 경로·편집 중인 표 내용은 그대로 유지한다."""
         keep = (self.json_row.edit.text(), self.out_row.edit.text(),
-                self.exe_row.edit.text(), self._out_user_edited)
+                self.exe_row.edit.text(), self._out_user_edited, self.exe_name_edit.text())
         snap = self.editor.snapshot()
         self.setWindowTitle(
             tr("수종 데이터 업데이터 (자체 완결형) - FORECAST-SW v{version}")
@@ -1562,6 +1587,7 @@ class UpdaterWindow(QMainWindow):
         self.out_row.edit.setText(keep[1])
         self.exe_row.edit.setText(keep[2])
         self._out_user_edited = keep[3]
+        self.exe_name_edit.setText(keep[4])
 
     def _setup_ui(self):
         root = QWidget()
@@ -1661,6 +1687,15 @@ class UpdaterWindow(QMainWindow):
         self.out_row.btn.clicked.connect(self._pick_out_dir)
         self.out_row.edit.textEdited.connect(self._mark_out_edited)
         bl.addWidget(self.out_row)
+
+        name_row = QHBoxLayout()
+        name_label = QLabel(tr("EXE 파일 이름"))
+        name_label.setFixedWidth(self._label_w)
+        self.exe_name_edit = QLineEdit(MAIN_EXE_NAME)
+        self.exe_name_edit.setPlaceholderText(MAIN_EXE_NAME)
+        name_row.addWidget(name_label)
+        name_row.addWidget(self.exe_name_edit)
+        bl.addLayout(name_row)
 
         self.build_btn = QPushButton(tr("새 exe 빌드 (PyInstaller)"))
         self.build_btn.setObjectName("primaryAction")
@@ -1811,6 +1846,13 @@ class UpdaterWindow(QMainWindow):
             self._set_build_status(tr("출력 폴더를 지정하세요."), "red")
             return
 
+        try:
+            exe_name = _normalize_exe_name(self.exe_name_edit.text())
+        except ValueError as exc:
+            self._set_build_status(str(exc), "red")
+            return
+        self.exe_name_edit.setText(exe_name)
+
         # 표준 릴리스 빌드(onefile · 콘솔 숨김 · UPX 없음)만 지원한다 — 나머지는
         # 개발자용 CLI 플래그로만 남겨둔다 (build_exe.py --help 참고).
         options: list[str] = []
@@ -1819,7 +1861,7 @@ class UpdaterWindow(QMainWindow):
         self.build_btn.setEnabled(False)
         self._set_build_status(tr("빌드 중..."), "black")
 
-        self._worker = BuildWorker(json_path, out_dir, options)
+        self._worker = BuildWorker(json_path, out_dir, options, exe_name=exe_name)
         self._worker.log_line.connect(self._append_log)
         self._worker.finished.connect(self._on_build_done)
         self._worker.start()

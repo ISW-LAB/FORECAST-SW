@@ -75,7 +75,7 @@ DEFAULT_ENVIRONMENT = RESTORATION_ENVIRONMENTS[0]
 
 # 대상지 × 생장형 보정계수 — 대상지 레코드의 연 직경 생장량에 **추가로** 곱한다.
 # 1.0 은 보정 없음이다. 식(a·b·CF·범위)은 건드리지 않으므로 0년차 현재 저장량은
-# 이 계수에 영향을 받지 않고 50년 시나리오만 달라진다.
+# 이 계수에 영향을 받지 않고 30년 시나리오만 달라진다.
 GROWTH_FACTOR_SECTION_TREE = "TREE_BASE"
 GROWTH_FACTOR_SECTION_SHRUB = "SHRUB_SPECIES"
 
