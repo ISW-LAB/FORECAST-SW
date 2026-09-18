@@ -243,6 +243,34 @@ FOREIGN_SPECIES: dict[str, EquationSpecies] = {
 DOMESTIC_NAMES = list(DOMESTIC_SPECIES.keys())
 FOREIGN_NAMES = list(FOREIGN_SPECIES.keys())
 
+# ── 대상지별 레코드 ────────────────────────────────────────────────────────
+# 확장 레코드도 교목·관목과 같은 규칙을 따른다 — 수종마다 대상지 3종의 레코드를
+# 보유하고 선택된 대상지 것 하나만 적용한다(대상지 공통 '기본식' 개념은 없다).
+# 원 자료에 대상지별 확장식이 없으므로 초기값은 세 대상지가 동일하며, 빌더에서
+# 대상지별로 나누어 넣을 수 있다.
+_ENVIRONMENTS: tuple[str, ...] = (
+    "산불피해지 자연복원",
+    "산불피해지 인공복원",
+    "채석장 인공복원",
+)
+
+DOMESTIC_BY_ENV: dict[str, dict[str, EquationSpecies]] = {
+    name: {env: spec for env in _ENVIRONMENTS}
+    for name, spec in DOMESTIC_SPECIES.items()
+}
+FOREIGN_BY_ENV: dict[str, dict[str, EquationSpecies]] = {
+    name: {env: spec for env in _ENVIRONMENTS}
+    for name, spec in FOREIGN_SPECIES.items()
+}
+
+
+def _record_for_env(by_env: dict, environment: str) -> EquationSpecies:
+    """대상지 레코드 조회. 해당 대상지가 없으면 정의된 첫 대상지로 폴백한다."""
+    spec = by_env.get(environment)
+    if spec is not None:
+        return spec
+    return next(iter(by_env.values()))
+
 
 def _load_from_bundled_json() -> None:
     """통합 species_data.json(또는 구 carbon2_species_data.json)으로
@@ -281,6 +309,11 @@ def _load_from_bundled_json() -> None:
         return
 
     global DOMESTIC_SPECIES, FOREIGN_SPECIES, DOMESTIC_NAMES, FOREIGN_NAMES
+    global DOMESTIC_BY_ENV, FOREIGN_BY_ENV
+
+    _envs = _raw.get('ENVIRONMENTS')
+    if not (isinstance(_envs, list) and all(isinstance(_e, str) for _e in _envs) and _envs):
+        _envs = list(_ENVIRONMENTS)
 
     def _parse(entry: dict) -> EquationSpecies:
         _rng = entry.get('range') or [None, None]
@@ -296,27 +329,62 @@ def _load_from_bundled_json() -> None:
             var2_default=float(_v2['default']) if _v2 else 10.0,
         )
 
-    _new_dom = {_n: _parse(_e) for _n, _e in _raw.get('DOMESTIC_SPECIES', {}).items()}
-    _new_for = {_n: _parse(_e) for _n, _e in _raw.get('FOREIGN_SPECIES', {}).items()}
+    def _parse_section(section: dict) -> dict:
+        """대상지별 확장 레코드. `by_env` 가 없으면 단일 레코드를 세 대상지에 펼친다."""
+        out: dict = {}
+        for _name, _entry in (section or {}).items():
+            if not isinstance(_entry, dict):
+                continue
+            _by_env = _entry.get('by_env')
+            if isinstance(_by_env, dict) and _by_env:
+                slot = {}
+                for _env, _rec in _by_env.items():
+                    if isinstance(_rec, dict) and _rec.get('equation'):
+                        try:
+                            slot[_env] = _parse(_rec)
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                if slot:
+                    out[_name] = slot
+                continue
+            if _entry.get('equation'):
+                try:
+                    single = _parse(_entry)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                out[_name] = {_env: single for _env in _envs}
+        return out
+
+    _new_dom = _parse_section(_raw.get('DOMESTIC_SPECIES'))
+    _new_for = _parse_section(_raw.get('FOREIGN_SPECIES'))
 
     if _new_dom:
-        DOMESTIC_SPECIES = _new_dom
+        DOMESTIC_BY_ENV = _new_dom
+        DOMESTIC_SPECIES = {_n: _record_for_env(_s, _envs[0])
+                            for _n, _s in _new_dom.items()}
         DOMESTIC_NAMES = list(_new_dom.keys())
     if _new_for:
-        FOREIGN_SPECIES = _new_for
+        FOREIGN_BY_ENV = _new_for
+        FOREIGN_SPECIES = {_n: _record_for_env(_s, _envs[0])
+                           for _n, _s in _new_for.items()}
         FOREIGN_NAMES = list(_new_for.keys())
 
 
 _load_from_bundled_json()
 
 
-def species_map(origin: str) -> dict[str, EquationSpecies]:
-    """origin: 'domestic' 또는 'foreign'."""
+def species_map(origin: str, environment: str | None = None
+                ) -> dict[str, EquationSpecies]:
+    """origin: 'domestic' 또는 'foreign'. 대상지를 주면 그 대상지 레코드를 돌려준다."""
     if origin == "domestic":
-        return DOMESTIC_SPECIES
-    if origin == "foreign":
-        return FOREIGN_SPECIES
-    raise ValueError(f"origin must be 'domestic' or 'foreign', got {origin!r}")
+        by_env, fallback = DOMESTIC_BY_ENV, DOMESTIC_SPECIES
+    elif origin == "foreign":
+        by_env, fallback = FOREIGN_BY_ENV, FOREIGN_SPECIES
+    else:
+        raise ValueError(f"origin must be 'domestic' or 'foreign', got {origin!r}")
+    if environment is None:
+        return fallback
+    return {name: _record_for_env(slot, environment) for name, slot in by_env.items()}
 
 
 def species_names(origin: str) -> list[str]:

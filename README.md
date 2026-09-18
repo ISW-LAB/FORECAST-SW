@@ -83,7 +83,9 @@ All 77 records are selectable in the site-assessment screen. Each record is file
 
 - Last three columns: annual diameter increment (cm yr⁻¹). **Zero = no prescribed growth** in that period.
 - `X` = DBH for trees, RCD for shrubs, in cm. Shrub equations fitted in mm are written as **`10X`**, with fitted limits converted to cm — the original relationship is preserved without refitting.
-- Site category is **descriptive metadata**; it does not select or modify coefficients (`test_site_category_does_not_select_coefficients`).
+- **Every species stores one record per site category**, and the application applies exactly the record for the selected category — there is no category-independent base equation (`SiteCategoryTests`). All four collections use the same `by_env` shape, keyed by the three categories.
+- Records that the sources actually differentiate carry different values: *Pinus densiflora* uses sheet rows 1 / 2 / 3 for the three categories. Every other species is initialized identically across the three and can be differentiated in the Manager as evidence becomes available.
+- **A growth factor** is applied on top of the selected record's annual diameter increments, held per category and growth form (default `1.0` = no adjustment), with an optional per-species override. It scales the 50-year scenario only; the equation is untouched, so year-0 stock does not move.
 - Full inventory: [`species_data.json`](species_data.json).
 
 #### Graph bases
@@ -250,7 +252,14 @@ python main.py --lang ko    # Korean
 
 ## 6. Edit and deploy the equation library
 
-The Manager opens `species_data.json` as an editable table across four tabs (Figure 2), with validation before saving and an automatic `.bak` backup. It bundles the full core source, so it runs standalone.
+The Manager opens `species_data.json` as editable tables (Figure 2), with validation before saving and an automatic `.bak` backup. It bundles the full core source, so it runs standalone.
+
+Tables are organized by site category — **one tab per category** (post-fire natural, post-fire artificial, quarry artificial), each split into **tree** and **shrub**:
+
+- Each table lists **every species of that growth form** — 59 trees and 18 shrubs — with the coefficient columns (`a, b, CF`, range, growth increments) and the equation columns (equation string, range, variables) merged into one grid. Columns that do not apply to a row are empty and cannot be edited, and a **type** column marks each row as core, domestic or international.
+- Values are edited per category: the same species is adjusted independently on each of the three tabs.
+- Adding or deleting a species applies to all three categories at once, so every species always has exactly one record per category.
+- **Growth factor** inputs sit at the top of each category tab, one for trees and one for shrubs (default `1.0`); they multiply that category's growth increments.
 
 | Method | Description | Python required |
 |---|---|:---:|

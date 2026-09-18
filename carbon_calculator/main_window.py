@@ -677,19 +677,20 @@ class MainWindow(QMainWindow):
         self.area_w = area_w
         self.area_h = area_h
 
-        # 대상지 유형은 보고서 메타데이터이며 수종별 기본 계수는 모든 대상지에서 동일하다.
+        # 대상지 유형 — 대상지별 식을 보유한 수종은 그 식을, 나머지는 기본식에
+        # 대상지별 생장량 보정계수를 적용한 레코드를 사용한다.
         self.environment = environment
 
         # 통합 라이브러리 77종 — 설명변수가 DBH 인 레코드는 교목 탭, RCD 는 관목 탭.
         # 각 맵은 core(성장차 보유) 를 먼저, 확장 레코드를 뒤에 둔다.
-        self._tree_records = lib.records_for_kind(lib.KIND_TREE)
-        self._shrub_records = lib.records_for_kind(lib.KIND_SHRUB)
+        self._tree_records = lib.records_for_kind(lib.KIND_TREE, environment)
+        self._shrub_records = lib.records_for_kind(lib.KIND_SHRUB, environment)
         self._tree_names = list(self._tree_records.keys())
         self._shrub_names = list(self._shrub_records.keys())
 
         # 3D 시각화는 성장차가 필요하므로 core 전용 맵을 따로 유지한다.
-        self._tree_species = lib.core_records_for_kind(lib.KIND_TREE)
-        self._shrub_species = lib.core_records_for_kind(lib.KIND_SHRUB)
+        self._tree_species = lib.core_records_for_kind(lib.KIND_TREE, environment)
+        self._shrub_species = lib.core_records_for_kind(lib.KIND_SHRUB, environment)
 
         # 추정 그래프 x축 기준 (연도별 / 직경)
         self._tree_basis = BASIS_YEAR

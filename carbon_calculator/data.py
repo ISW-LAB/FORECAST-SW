@@ -19,7 +19,7 @@ CSV vs MATLAB 차이 (CSV를 출처상의 진실로 채택):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 
@@ -62,7 +62,10 @@ class SpeciesData:
         return self.growth_y21
 
 
-# 대상지 유형 — 프로젝트 설명과 결과 구분을 위한 메타데이터.
+# 대상지 유형 — 프로젝트 구분 메타데이터이며, 아래 두 경로로만 계산에 관여한다.
+#   ① 수종마다 대상지 3종의 레코드를 각각 보유하고, 선택된 대상지 것 하나만 적용한다
+#      (대상지 공통 '기본식' 개념은 없다).
+#   ② 그 위에 대상지 × 생장형 보정계수가 연 직경 생장량에 추가로 곱해진다.
 RESTORATION_ENVIRONMENTS = (
     "산불피해지 자연복원",
     "산불피해지 인공복원",
@@ -70,22 +73,64 @@ RESTORATION_ENVIRONMENTS = (
 )
 DEFAULT_ENVIRONMENT = RESTORATION_ENVIRONMENTS[0]
 
+# 대상지 × 생장형 보정계수 — 대상지 레코드의 연 직경 생장량에 **추가로** 곱한다.
+# 1.0 은 보정 없음이다. 식(a·b·CF·범위)은 건드리지 않으므로 0년차 현재 저장량은
+# 이 계수에 영향을 받지 않고 50년 시나리오만 달라진다.
+GROWTH_FACTOR_SECTION_TREE = "TREE_BASE"
+GROWTH_FACTOR_SECTION_SHRUB = "SHRUB_SPECIES"
 
-def _env_species(default: SpeciesData) -> dict:
-    """수종별 기본 계수 레코드를 내부 형식으로 감싼다."""
-    return {"default": default}
+ENVIRONMENT_GROWTH_FACTORS: dict[str, dict[str, float]] = {
+    env: {GROWTH_FACTOR_SECTION_TREE: 1.0, GROWTH_FACTOR_SECTION_SHRUB: 1.0}
+    for env in RESTORATION_ENVIRONMENTS
+}
+
+# 수종 단위 예외 — {수종명: {대상지: 계수}}. 있으면 대상지×생장형 계수보다 우선한다.
+SPECIES_GROWTH_FACTORS: dict[str, dict[str, float]] = {}
 
 
-# 교목 (Tree) — 수종별 검증된 기본 계수 레코드.
+def _by_env(**per_env: SpeciesData) -> dict:
+    """대상지별 레코드 묶음을 만든다 (키는 대상지 이름).
+
+    호출 편의를 위해 위치 인자 대신 `_all_env` / `_each_env` 를 쓴다.
+    """
+    return {"by_env": dict(per_env)}
+
+
+def _all_env(spec: SpeciesData) -> dict:
+    """세 대상지에 같은 레코드를 부여한다.
+
+    패키징 폴백 라이브러리에서 대상지별 근거가 아직 없는 수종의 초기 상태다.
+    빌더에서 대상지별로 값을 나누어 넣으면 JSON 이 이 값을 대체한다.
+    """
+    return {"by_env": {env: spec for env in RESTORATION_ENVIRONMENTS}}
+
+
+def _each_env(natural: SpeciesData, artificial: SpeciesData,
+              quarry: SpeciesData) -> dict:
+    """대상지별로 서로 다른 레코드를 부여한다 (원 자료에 근거가 있는 경우)."""
+    return {"by_env": {
+        RESTORATION_ENVIRONMENTS[0]: natural,
+        RESTORATION_ENVIRONMENTS[1]: artificial,
+        RESTORATION_ENVIRONMENTS[2]: quarry,
+    }}
+
+
+# 교목 (Tree) — 수종마다 대상지 3종의 레코드를 보유한다.
 # 라벨/계수/범위 출처: 「기초 DB 자료」 시트 순번 1, 2, 3, 4, 5, 6, 7, 8, 9
+#   순번 1·2·3 = 소나무의 대상지 3종. 그 외 수종은 대상지별 근거가 없어 세 대상지에
+#   같은 값으로 초기화되며, 연 직경 생장량은 출처(MATLAB TreeGrowthMap)의 값을 쓴다.
 TREE_BASE: dict[str, dict] = {
-    "소나무":     _env_species(SpeciesData(0.0737, 2.5735, 0.5, 1, 15, 0.11, 0.20, 0.70)),
-    "곰솔":       _env_species(SpeciesData(0.0679, 2.5770, 0.5, 1, 29, 0.24, 0.32, 0.32)),
-    "편백":       _env_species(SpeciesData(0.3617, 2.0450, 0.5, 1, 50, 0.11, 0.23, 0.23)),
-    "졸참나무":   _env_species(SpeciesData(0.2002, 2.3767, 0.5, 1, 30, 0.13, 0.30, 0.30)),
-    "아까시나무": _env_species(SpeciesData(0.1391, 2.5016, 0.5, 1, 30, 0.14, 0.20, 0.20)),
-    "붉가시나무": _env_species(SpeciesData(0.1926, 2.4300, 0.5, 1, 40, 0.12, 0.16, 0.16)),
-    "신갈나무":   _env_species(SpeciesData(0.0147, 3.1075, 0.5, 6, 30, 0.40, 0.40, 0.40)),
+    "소나무":     _each_env(
+        SpeciesData(0.0737, 2.5735, 0.5, 1, 15, 0.11, 0.20, 0.70),   # 순번 1 자연복원
+        SpeciesData(0.0722, 2.6044, 0.5, 1, 22, 0.11, 0.20, 0.70),   # 순번 2 인공복원
+        SpeciesData(0.1323, 2.2619, 0.5, 1, 25, 0.11, 0.20, 0.70),   # 순번 3 채석장
+    ),
+    "곰솔":       _all_env(SpeciesData(0.0679, 2.5770, 0.5, 1, 29, 0.24, 0.32, 0.32)),
+    "편백":       _all_env(SpeciesData(0.3617, 2.0450, 0.5, 1, 50, 0.11, 0.23, 0.23)),
+    "졸참나무":   _all_env(SpeciesData(0.2002, 2.3767, 0.5, 1, 30, 0.13, 0.30, 0.30)),
+    "아까시나무": _all_env(SpeciesData(0.1391, 2.5016, 0.5, 1, 30, 0.14, 0.20, 0.20)),
+    "붉가시나무": _all_env(SpeciesData(0.1926, 2.4300, 0.5, 1, 40, 0.12, 0.16, 0.16)),
+    "신갈나무":   _all_env(SpeciesData(0.0147, 3.1075, 0.5, 6, 30, 0.40, 0.40, 0.40)),
 }
 
 # 관목 (Shrub, 15종).
@@ -96,7 +141,7 @@ def _legacy_shrub_species(*values: float) -> SpeciesData:
     return SpeciesData(*values, equation_diameter_unit="mm")
 
 
-SHRUB_SPECIES: dict[str, SpeciesData] = {
+_SHRUB_SOURCE: dict[str, SpeciesData] = {
     "사철나무":     _legacy_shrub_species(0.0002,    2.50, 0.50,  6, 53, 0.30, 0.22, 0.22),
     "산철쭉":       _legacy_shrub_species(0.0003,    2.40, 0.50,  1, 22, 0.31, 0.17, 0.17),
     "조팝나무":     _legacy_shrub_species(0.00025,   2.60, 0.50,  5, 44, 0.20, 0.14, 0.14),
@@ -116,22 +161,81 @@ SHRUB_SPECIES: dict[str, SpeciesData] = {
     "흰말채나무":   _legacy_shrub_species(0.00027,   2.52, 0.50,  7, 52, 0.29, 0.26, 0.26),
 }
 
+# 관목도 교목과 같은 구조로 대상지 3종의 레코드를 보유한다. 원 자료에 대상지별
+# 관목식이 없으므로 초기값은 세 대상지가 동일하며, 빌더에서 나누어 넣을 수 있다.
+SHRUB_BASE: dict[str, dict] = {
+    name: _all_env(spec) for name, spec in _SHRUB_SOURCE.items()
+}
 
-# ----- 대상지 메타데이터와 호환되는 조회 함수 -----
+
+# ----- 대상지별 조회 함수 -----
+
+def _record_for_env(entry: dict, environment: str) -> SpeciesData:
+    """대상지 레코드 조회. 해당 대상지가 없으면 정의된 첫 대상지로 폴백한다."""
+    by_env = entry.get("by_env") or {}
+    spec = by_env.get(environment)
+    if spec is not None:
+        return spec
+    if by_env:
+        return next(iter(by_env.values()))
+    # 아주 오래된 JSON 호환 (대상지 구분 없이 단일 레코드만 있던 시절)
+    return entry["default"]
+
+def growth_factor(species: str, environment: str, section: str) -> float:
+    """해당 수종·대상지에 적용할 연 직경 생장량 보정계수.
+
+    우선순위: 수종별 예외(`SPECIES_GROWTH_FACTORS`) → 대상지×생장형
+    (`ENVIRONMENT_GROWTH_FACTORS`) → 1.0(보정 없음).
+    """
+    per_species = SPECIES_GROWTH_FACTORS.get(species)
+    if per_species is not None and environment in per_species:
+        try:
+            value = float(per_species[environment])
+        except (TypeError, ValueError):
+            value = 1.0
+        return value if value > 0 else 1.0
+
+    by_env = ENVIRONMENT_GROWTH_FACTORS.get(environment) or {}
+    try:
+        value = float(by_env.get(section, 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    return value if value > 0 else 1.0
+
+
+def _apply_growth_factor(spec: SpeciesData, factor: float) -> SpeciesData:
+    if factor == 1.0:
+        return spec
+    return replace(
+        spec,
+        growth_y10=spec.growth_y10 * factor,
+        growth_y20=spec.growth_y20 * factor,
+        growth_y21=spec.growth_y21 * factor,
+    )
+
 
 def tree_species_for_env(environment: str) -> dict[str, SpeciesData]:
-    """모든 대상지 유형에 동일한 검증 기본 레코드를 반환한다.
+    """주어진 대상지 유형의 {수종명: SpeciesData}.
 
-    ``environment`` 인수는 저장 파일과 호출 API의 호환성을 위해 유지된다.
+    수종마다 보유한 대상지 3종의 레코드 중 해당 대상지 것을 쓰고, 그 레코드의
+    연 직경 생장량에 대상지 × 생장형 보정계수를 추가로 곱한다.
     """
-    del environment
-    return {name: spec["default"] for name, spec in TREE_BASE.items()}
+    return {
+        name: _apply_growth_factor(
+            _record_for_env(entry, environment),
+            growth_factor(name, environment, GROWTH_FACTOR_SECTION_TREE))
+        for name, entry in TREE_BASE.items()
+    }
 
 
 def shrub_species_for_env(environment: str) -> dict[str, SpeciesData]:
-    """모든 대상지 유형에 동일한 관목 레코드를 반환한다."""
-    del environment
-    return dict(SHRUB_SPECIES)
+    """주어진 대상지 유형의 관목 레코드 (교목과 동일한 규칙)."""
+    return {
+        name: _apply_growth_factor(
+            _record_for_env(entry, environment),
+            growth_factor(name, environment, GROWTH_FACTOR_SECTION_SHRUB))
+        for name, entry in SHRUB_BASE.items()
+    }
 
 
 def tree_names() -> list[str]:
@@ -140,11 +244,12 @@ def tree_names() -> list[str]:
 
 
 def shrub_names() -> list[str]:
-    return list(SHRUB_SPECIES.keys())
+    return list(SHRUB_BASE.keys())
 
 
 # 하위 호환 기본 export (환경 미지정 = 기본 환경). 기존 코드/검증 스크립트가 참조.
 TREE_SPECIES = tree_species_for_env(DEFAULT_ENVIRONMENT)
+SHRUB_SPECIES = shrub_species_for_env(DEFAULT_ENVIRONMENT)
 TREE_NAMES = list(TREE_SPECIES.keys())
 SHRUB_NAMES = list(SHRUB_SPECIES.keys())
 
@@ -190,35 +295,102 @@ def _load_from_bundled_json() -> None:
     from .i18n import load_json_overrides as _load_i18n_overrides
     _load_i18n_overrides(_raw)
 
-    global TREE_BASE, SHRUB_SPECIES, TREE_SPECIES, TREE_NAMES, SHRUB_NAMES
-
-    _new_tree: dict = {}
-    for _name, _entry in _raw.get('TREE_BASE', {}).items():
-        if isinstance(_entry, dict) and 'default' in _entry:
-            _sd = SpeciesData(*_entry['default'])
-            _new_tree[_name] = _env_species(_sd)
-        elif isinstance(_entry, list):
-            _new_tree[_name] = _env_species(SpeciesData(*_entry))
+    global TREE_BASE, SHRUB_BASE, SHRUB_SPECIES, TREE_SPECIES, TREE_NAMES, SHRUB_NAMES
+    global ENVIRONMENT_GROWTH_FACTORS, SPECIES_GROWTH_FACTORS
 
     _schema = _raw.get('_schema') if isinstance(_raw.get('_schema'), dict) else {}
     _shrub_equation_unit = _schema.get('SHRUB_SPECIES_equation_diameter_unit', 'mm')
     if _shrub_equation_unit not in ('cm', 'mm'):
         _shrub_equation_unit = 'mm'
 
-    _new_shrub: dict = {}
-    for _name, _arr in _raw.get('SHRUB_SPECIES', {}).items():
-        _new_shrub[_name] = SpeciesData(
-            *_arr, equation_diameter_unit=_shrub_equation_unit,
-        )
+    def _parse_section(_section: dict, _unit: str) -> dict:
+        """대상지별 레코드(8개 값) 를 읽는다.
+
+        `by_env` 가 있으면 그것만 쓴다(대상지 3종 각각의 전체 레코드). 구버전
+        JSON 의 단일 레코드(`default` 또는 배열)는 세 대상지에 같은 값으로 펼친다.
+        """
+        _out: dict = {}
+        for _name, _entry in (_section or {}).items():
+            _by_env: dict = {}
+            if isinstance(_entry, dict):
+                for _env, _arr in (_entry.get('by_env') or {}).items():
+                    if not isinstance(_arr, (list, tuple)) or len(_arr) < 8:
+                        continue
+                    try:
+                        _by_env[_env] = SpeciesData(
+                            *(float(_v) for _v in _arr[:8]),
+                            equation_diameter_unit=_unit,
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                if not _by_env and isinstance(_entry.get('default'), (list, tuple)):
+                    try:
+                        _single = SpeciesData(*_entry['default'],
+                                              equation_diameter_unit=_unit)
+                        _by_env = {_env: _single for _env in RESTORATION_ENVIRONMENTS}
+                    except (TypeError, ValueError):
+                        pass
+            elif isinstance(_entry, (list, tuple)):
+                try:
+                    _single = SpeciesData(*_entry, equation_diameter_unit=_unit)
+                    _by_env = {_env: _single for _env in RESTORATION_ENVIRONMENTS}
+                except (TypeError, ValueError):
+                    pass
+            if _by_env:
+                _out[_name] = {'by_env': _by_env}
+        return _out
+
+    _new_tree = _parse_section(_raw.get('TREE_BASE'), 'cm')
+    _new_shrub_base = _parse_section(_raw.get('SHRUB_SPECIES'), _shrub_equation_unit)
+
+    # 대상지 × 생장형 보정계수와 수종별 예외 (없으면 기본 1.0 유지)
+    _raw_factors = _raw.get('ENVIRONMENT_GROWTH_FACTORS')
+    if isinstance(_raw_factors, dict):
+        _new_factors = {
+            _env: {GROWTH_FACTOR_SECTION_TREE: 1.0, GROWTH_FACTOR_SECTION_SHRUB: 1.0}
+            for _env in RESTORATION_ENVIRONMENTS
+        }
+        for _env, _sections in _raw_factors.items():
+            if not isinstance(_sections, dict):
+                continue
+            _slot = _new_factors.setdefault(
+                _env, {GROWTH_FACTOR_SECTION_TREE: 1.0, GROWTH_FACTOR_SECTION_SHRUB: 1.0})
+            for _section in (GROWTH_FACTOR_SECTION_TREE, GROWTH_FACTOR_SECTION_SHRUB):
+                try:
+                    _value = float(_sections.get(_section, 1.0))
+                except (TypeError, ValueError):
+                    continue
+                if _value > 0:
+                    _slot[_section] = _value
+        ENVIRONMENT_GROWTH_FACTORS = _new_factors
+
+    _raw_species_factors = _raw.get('SPECIES_GROWTH_FACTORS')
+    if isinstance(_raw_species_factors, dict):
+        _new_species_factors: dict = {}
+        for _species, _envs in _raw_species_factors.items():
+            if not isinstance(_envs, dict):
+                continue
+            _slot = {}
+            for _env, _value in _envs.items():
+                try:
+                    _value = float(_value)
+                except (TypeError, ValueError):
+                    continue
+                if _value > 0:
+                    _slot[_env] = _value
+            if _slot:
+                _new_species_factors[_species] = _slot
+        SPECIES_GROWTH_FACTORS = _new_species_factors
 
     if _new_tree:
         TREE_BASE = _new_tree
-    if _new_shrub:
-        SHRUB_SPECIES = _new_shrub
+    if _new_shrub_base:
+        SHRUB_BASE = _new_shrub_base
 
     TREE_SPECIES = tree_species_for_env(DEFAULT_ENVIRONMENT)
+    SHRUB_SPECIES = shrub_species_for_env(DEFAULT_ENVIRONMENT)
     TREE_NAMES = list(TREE_SPECIES.keys())
-    SHRUB_NAMES = list(_new_shrub.keys()) if _new_shrub else SHRUB_NAMES
+    SHRUB_NAMES = list(SHRUB_SPECIES.keys())
 
 
 _load_from_bundled_json()

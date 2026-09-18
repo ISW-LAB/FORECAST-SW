@@ -31,7 +31,7 @@ import numpy as np
 from .data import (
     DEFAULT_ENVIRONMENT, SpeciesData, shrub_species_for_env, tree_species_for_env,
 )
-from .data2 import CARBON_FACTOR, EquationSpecies, DOMESTIC_SPECIES, FOREIGN_SPECIES
+from .data2 import CARBON_FACTOR, EquationSpecies, species_map
 from .equation_eval import EvaluationError, evaluate
 from .i18n import species_name, tr
 
@@ -148,10 +148,11 @@ class LibraryRecord:
 
 # ─────────────────────────── 레코드 구성 ───────────────────────────
 
-def _core_records(kind: str) -> dict[str, LibraryRecord]:
-    """core 22종. 대상지 유형은 계수를 바꾸지 않으므로 기본 레코드를 쓴다."""
-    table = (tree_species_for_env(DEFAULT_ENVIRONMENT) if kind == KIND_TREE
-             else shrub_species_for_env(DEFAULT_ENVIRONMENT))
+def _core_records(kind: str, environment: str = DEFAULT_ENVIRONMENT
+                  ) -> dict[str, LibraryRecord]:
+    """core 22종. 대상지별 식 오버라이드와 생장량 보정계수가 반영된 레코드를 쓴다."""
+    table = (tree_species_for_env(environment) if kind == KIND_TREE
+             else shrub_species_for_env(environment))
     label = "DBH (cm)" if kind == KIND_TREE else "RCD (cm)"
     return {
         name: LibraryRecord(
@@ -185,27 +186,27 @@ def _extension_record(key: str, sp: EquationSpecies, origin: str) -> LibraryReco
     )
 
 
-def all_records() -> dict[str, LibraryRecord]:
+def all_records(environment: str = DEFAULT_ENVIRONMENT) -> dict[str, LibraryRecord]:
     """77개 레코드 전체 (core → extension 순). 키가 겹치면 core 를 유지한다.
 
     `data`·`data2` 는 import 시 `species_data.json` 으로 덮어써질 수 있으므로
-    호출 시점에 다시 구성한다.
+    호출 시점에 다시 구성한다. core 레코드는 `environment` 에 맞게 해석된다.
     """
     records: dict[str, LibraryRecord] = {}
-    records.update(_core_records(KIND_TREE))
-    records.update(_core_records(KIND_SHRUB))
-    for origin, table in ((ORIGIN_DOMESTIC, DOMESTIC_SPECIES),
-                          (ORIGIN_FOREIGN, FOREIGN_SPECIES)):
-        for key, sp in table.items():
+    records.update(_core_records(KIND_TREE, environment))
+    records.update(_core_records(KIND_SHRUB, environment))
+    for origin in (ORIGIN_DOMESTIC, ORIGIN_FOREIGN):
+        for key, sp in species_map(origin, environment).items():
             if key in records:
                 continue  # core 레코드가 우선 (현재 키 충돌은 없음)
             records[key] = _extension_record(key, sp, origin)
     return records
 
 
-def records_for_kind(kind: str) -> dict[str, LibraryRecord]:
+def records_for_kind(kind: str, environment: str = DEFAULT_ENVIRONMENT
+                     ) -> dict[str, LibraryRecord]:
     """해당 분류(교목/관목)의 레코드. core 를 먼저, 이어서 extension 을 둔다."""
-    everything = all_records()
+    everything = all_records(environment)
     core = {k: r for k, r in everything.items()
             if r.kind == kind and r.is_core}
     extension = {k: r for k, r in everything.items()
@@ -214,9 +215,10 @@ def records_for_kind(kind: str) -> dict[str, LibraryRecord]:
     return core
 
 
-def core_records_for_kind(kind: str) -> dict[str, SpeciesData]:
+def core_records_for_kind(kind: str, environment: str = DEFAULT_ENVIRONMENT
+                          ) -> dict[str, SpeciesData]:
     """3D 시각화처럼 성장차가 필요한 경로가 쓰는 core 전용 맵."""
-    return {k: r.species_data for k, r in _core_records(kind).items()
+    return {k: r.species_data for k, r in _core_records(kind, environment).items()
             if r.species_data is not None}
 
 

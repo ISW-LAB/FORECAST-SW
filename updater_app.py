@@ -39,9 +39,9 @@ from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView, QSizePolicy, QApplication, QComboBox, QDialog, QDialogButtonBox,
-    QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPlainTextEdit, QPushButton, QScrollArea, QTabWidget, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QTabWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from carbon_calculator.equation_eval import evaluate as _safe_equation_evaluate
@@ -78,6 +78,33 @@ _EN: dict[str, str] = {
         "environment is created automatically on first use).",
     "출력 폴더 (exe 저장 위치)": "Output folder (where the executable is written)",
     "새 exe 빌드 (PyInstaller)": "Build new executable (PyInstaller)",
+
+    # ── 대상지별 편집 ──
+    "수종별 상대생장식 (대상지별 · 추가/수정/삭제)":
+        "Allometric equations by site category (add / edit / delete)",
+    "성장률 보정계수": "Growth factor",
+    "핵심": "Core",
+    "최소": "Min",
+    "최대": "Max",
+    "표시 직경은 모두 cm입니다 · 교목식은 X=DBH(cm), 기존 관목식은 계수를 "
+    "보존하여 X=10×RCD(cm)로 평가합니다":
+        "All displayed diameters are in cm. Tree equations take X = DBH (cm); legacy "
+        "shrub equations keep their coefficients and are evaluated at X = 10 x RCD (cm).",
+    "핵심 수종은 a·b·CF·범위·성장률을, 확장 수종(국내·국외)은 상대생장식·"
+    "범위·변수를 채웁니다 · 해당 없는 열은 비어 있고 수정할 수 없습니다":
+        "Core species use a, b, CF, range and growth increments; extension species "
+        "(domestic/international) use the equation, range and variables. Columns that "
+        "do not apply are left empty and cannot be edited.",
+    "수종을 추가·삭제하면 세 대상지에 함께 적용됩니다 · 같은 수종의 "
+    "대상지별 값은 각 탭에서 따로 수정합니다":
+        "Adding or removing a species applies to all three site categories; its "
+        "per-category values are edited on each tab separately.",
+    "{n}개 수종을 세 대상지에서 모두 삭제할까요?\n{names}":
+        "Delete {n} species from all three site categories?\n{names}",
+    "{where}: '{name}' 의 상대생장식이 비어 있습니다":
+        "{where}: the allometric equation for '{name}' is empty",
+    "{where}: '{name}' 식 평가 실패 — {error}":
+        "{where}: could not evaluate the equation for '{name}' — {error}",
     "준비": "Ready",
     "빌드 중...": "Building...",
     "빌드 완료!": "Build complete",
@@ -708,23 +735,108 @@ _SECTION_TREE, _SECTION_SHRUB, _SECTION_DOM, _SECTION_FOR = (
 
 # 열 정의: (표시 헤더, 내부 키). 헤더는 tr() 로 번역된다.
 _COEF_KEYS = ("a", "b", "cf", "dmin", "dmax", "g10", "g20", "g21")
-_TREE_COLS = [
-    ("수종명", "name"), ("학명", "sci"), ("a", "a"), ("b", "b"), ("CF", "cf"),
-    ("최소직경(cm)", "dmin"), ("최대직경(cm)", "dmax"),
-    ("성장률(~10y)", "g10"), ("성장률(11~20y)", "g20"), ("성장률(21y~)", "g21"),
-]
-_SHRUB_COLS = [
-    ("수종명", "name"), ("학명", "sci"), ("a", "a"), ("b", "b"), ("CF", "cf"),
-    ("최소직경(cm)", "dmin"), ("최대직경(cm)", "dmax"),
-    ("성장률(~10y)", "g10"), ("성장률(11~20y)", "g20"), ("성장률(21y~)", "g21"),
-]
-_EQ_COLS = [
-    ("수종명", "name"), ("학명", "sci"), ("상대생장식", "eq"),
-    ("범위 최소", "rmin"), ("범위 최대", "rmax"), ("변수1 라벨", "v1"),
-    ("변수2 라벨", "v2"), ("변수2 최소", "v2min"), ("변수2 최대", "v2max"),
-    ("변수2 기본값", "v2def"),
-]
 _ROLE_TRUE_NAME = Qt.UserRole + 1  # 수종명 셀이 학명으로 표시(영문 모드·읽기전용)될 때 실제 저장 키(국문)
+
+# 기본 대상지 목록 — JSON 의 ENVIRONMENTS 가 없을 때의 폴백
+_DEFAULT_ENVIRONMENTS = (
+    "산불피해지 자연복원",
+    "산불피해지 인공복원",
+    "채석장 인공복원",
+)
+
+# ── 대상지별 통합 표 ──────────────────────────────────────────────────────
+# 한 대상지·생장형의 전체 수종을 하나의 표로 보여주기 위해 계수형(핵심 22종)과
+# 식형(확장 55종)의 열을 합쳐 둔다. 행 종류에 따라 해당 없는 열은 비어 있고
+# 읽기 전용이 된다.
+_MERGED_COLS = [
+    ("수종명", "name"), ("학명", "sci"), ("구분", "origin"),
+    ("a", "a"), ("b", "b"), ("CF", "cf"),
+    ("최소", "dmin"), ("최대", "dmax"),
+    ("성장률(~10y)", "g10"), ("성장률(11~20y)", "g20"), ("성장률(21y~)", "g21"),
+    ("상대생장식", "eq"), ("변수1 라벨", "v1"), ("변수2 라벨", "v2"),
+    ("변수2 최소", "v2min"), ("변수2 최대", "v2max"), ("변수2 기본값", "v2def"),
+]
+(_COL_NAME, _COL_SCI, _COL_ORIGIN, _COL_A, _COL_B, _COL_CF, _COL_DMIN, _COL_DMAX,
+ _COL_G10, _COL_G20, _COL_G21, _COL_EQ, _COL_V1, _COL_V2, _COL_V2MIN, _COL_V2MAX,
+ _COL_V2DEF) = range(len(_MERGED_COLS))
+
+# 계수형 행이 쓰는 열 (저장 배열 순서와 같다: a, b, cf, dmin, dmax, g10, g20, g21)
+_COL_CORE = (_COL_A, _COL_B, _COL_CF, _COL_DMIN, _COL_DMAX,
+             _COL_G10, _COL_G20, _COL_G21)
+# 식형 행이 쓰는 열
+_COL_EQ_FIELDS = (_COL_DMIN, _COL_DMAX, _COL_EQ, _COL_V1, _COL_V2,
+                  _COL_V2MIN, _COL_V2MAX, _COL_V2DEF)
+# 행 종류별로 비워 두는 열
+_COL_EQ_ONLY = tuple(c for c in _COL_EQ_FIELDS if c not in _COL_CORE)
+_COL_CORE_ONLY = tuple(c for c in _COL_CORE if c not in _COL_EQ_FIELDS)
+
+_ROLE_ROW_KIND = Qt.UserRole + 2   # 행 종류: 핵심(_ROW_CORE) / 국내 / 국외
+_ROW_CORE = "core"
+_ORIGIN_DOM = "domestic"
+_ORIGIN_FOR = "foreign"
+
+_KIND_TREE, _KIND_SHRUB = "tree", "shrub"
+
+# 확장 레코드의 교목/관목 분류 — carbon_calculator/species_library.py 의 규칙과
+# 같아야 한다. Manager exe 는 numpy 를 번들하지 않으므로 그 모듈을 import 하지 않고
+# 규칙만 복제한다.
+_KIND_OVERRIDES = {
+    "서양개암나무(지상부)": _KIND_SHRUB,   # 변수가 수고 h + LAI 이며 개암나무류는 관목
+}
+
+
+def _classify_kind(name: str, var1_label: str) -> str:
+    """설명변수로 교목/관목을 판정한다 (RCD → 관목, 그 외 → 교목)."""
+    override = _KIND_OVERRIDES.get(name)
+    if override is not None:
+        return override
+    return _KIND_SHRUB if "RCD" in (var1_label or "").upper() else _KIND_TREE
+
+
+def _coef_record(entry, env: str):
+    """계수형 섹션에서 대상지 레코드(8개 값) 를 꺼낸다. 없으면 None."""
+    if isinstance(entry, dict):
+        by_env = entry.get("by_env")
+        if isinstance(by_env, dict) and by_env:
+            arr = by_env.get(env)
+            if arr is None:
+                arr = next(iter(by_env.values()))
+            return list(arr) if isinstance(arr, (list, tuple)) else None
+        if isinstance(entry.get("default"), (list, tuple)):
+            return list(entry["default"])
+        return None
+    if isinstance(entry, (list, tuple)):
+        return list(entry)
+    return None
+
+
+def _eq_record(entry, env: str):
+    """식형 섹션에서 대상지 레코드(dict) 를 꺼낸다. 없으면 None."""
+    if not isinstance(entry, dict):
+        return None
+    by_env = entry.get("by_env")
+    if isinstance(by_env, dict) and by_env:
+        rec = by_env.get(env)
+        if rec is None:
+            rec = next(iter(by_env.values()))
+        return rec if isinstance(rec, dict) else None
+    return entry if entry.get("equation") else None
+
+
+
+def _growth_factor_of(data: dict | None, env: str, section: str) -> float:
+    """저장된 대상지 × 생장형 보정계수 (없으면 1.0)."""
+    table = (data or {}).get("ENVIRONMENT_GROWTH_FACTORS")
+    if not isinstance(table, dict):
+        return 1.0
+    slot = table.get(env)
+    if not isinstance(slot, dict):
+        return 1.0
+    try:
+        value = float(slot.get(section, 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    return value if value > 0 else 1.0
 
 
 def _section_equation_unit(data: dict | None, section: str) -> str:
@@ -823,58 +935,72 @@ def _mk_item(text: str, editable: bool = True) -> QTableWidgetItem:
 
 
 class SpeciesEditor(QGroupBox):
-    """species_data.json 4개 섹션의 표 편집기 (추가·수정·삭제·저장)."""
+    """대상지별 상대생장식 표 편집기.
+
+    구성은 **대상지 3탭 × (교목 / 관목)** 이며, 각 표는 그 대상지·생장형의
+    **전체 수종**(핵심 계수형 + 확장 식형)을 열을 합친 하나의 표로 보여준다.
+    대상지 공통 '기본식' 개념은 없다 — 수종마다 대상지 3종의 레코드를 각각 보유하고
+    프로그램은 선택된 대상지 것 하나만 적용한다.
+
+    성장률 보정계수는 각 대상지 탭 상단에 있으며, 그 대상지 레코드의 연 직경
+    생장량에 **추가로** 곱해진다(1.0 = 보정 없음).
+    """
 
     dirty_changed = pyqtSignal(bool)
     save_requested = pyqtSignal()
 
     def __init__(self, parent=None):
-        super().__init__(tr("수종별 상대생장식 (JSON 미리보기 · 추가/수정/삭제)"), parent)
+        super().__init__(tr("수종별 상대생장식 (대상지별 · 추가/수정/삭제)"), parent)
         self._data: dict | None = None      # 마지막으로 불러온/저장한 원본 dict
         self._dirty = False
         self._loading = False
+        self._env_list: list[str] = list(_DEFAULT_ENVIRONMENTS)
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────
+    def _new_table(self) -> QTableWidget:
+        t = QTableWidget(0, len(_MERGED_COLS))
+        t.setHorizontalHeaderLabels([tr(h) for h, _k in _MERGED_COLS])
+        t.setSelectionBehavior(QAbstractItemView.SelectRows)
+        t.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        t.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+                          | QAbstractItemView.AnyKeyPressed)
+        t.setAlternatingRowColors(True)
+        t.setWordWrap(False)
+        t.setTextElideMode(Qt.ElideRight)
+        t.verticalHeader().setDefaultSectionSize(_px(34))
+        t.verticalHeader().setMinimumSectionSize(_px(32))
+        t.horizontalHeader().setMinimumHeight(_px(38))
+        t.horizontalHeader().setMinimumSectionSize(_px(70))
+        t.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        t.horizontalHeader().setStretchLastSection(True)
+        t.setMinimumHeight(_px(250))
+        t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        t.itemChanged.connect(self._on_item_changed)
+        return t
+
     def _build_ui(self):
         v = QVBoxLayout(self)
+
         self.tabs = QTabWidget()
-        self.tables: dict[str, QTableWidget] = {}
-        for section, title, cols in (
-            (_SECTION_TREE, "교목 (TREE_BASE)", _TREE_COLS),
-            (_SECTION_SHRUB, "관목 (SHRUB_SPECIES)", _SHRUB_COLS),
-            (_SECTION_DOM, "국내 수종 (DOMESTIC_SPECIES)", _EQ_COLS),
-            (_SECTION_FOR, "국외 수종 (FOREIGN_SPECIES)", _EQ_COLS),
-        ):
-            t = QTableWidget(0, len(cols))
-            t.setHorizontalHeaderLabels([tr(h) for h, _k in cols])
-            t.setSelectionBehavior(QAbstractItemView.SelectRows)
-            t.setSelectionMode(QAbstractItemView.ExtendedSelection)
-            t.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
-                              | QAbstractItemView.AnyKeyPressed)
-            t.setAlternatingRowColors(True)
-            t.setWordWrap(False)
-            t.setTextElideMode(Qt.ElideRight)
-            t.verticalHeader().setDefaultSectionSize(_px(34))
-            t.verticalHeader().setMinimumSectionSize(_px(32))
-            t.horizontalHeader().setMinimumHeight(_px(38))
-            t.horizontalHeader().setMinimumSectionSize(_px(74))
-            t.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-            t.horizontalHeader().setStretchLastSection(True)
-            t.setMinimumHeight(_px(250))
-            t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            t.itemChanged.connect(self._on_item_changed)
-            self.tables[section] = t
-            self.tabs.addTab(t, tr(title))
+        self.env_tables: dict[tuple, QTableWidget] = {}
+        self.factor_spins: dict[tuple, QDoubleSpinBox] = {}
+        self._inner_tabs: dict[str, QTabWidget] = {}
+
+        for env in self._env_list:
+            self.tabs.addTab(self._build_env_tab(env), env)
         self.tabs.currentChanged.connect(self._sync_buttons)
         v.addWidget(self.tabs, 1)
 
         hint = QLabel(
-            tr("모든 표시 직경은 cm입니다 · 교목식은 X=DBH(cm), 기존 관목식은 계수를 보존하여 "
-               "X=10×RCD(cm)로 평가합니다")
+            tr("표시 직경은 모두 cm입니다 · 교목식은 X=DBH(cm), 기존 관목식은 계수를 "
+               "보존하여 X=10×RCD(cm)로 평가합니다")
             + "\n"
-            + tr("셀을 더블클릭해 수정합니다 · 범위를 비우면 '범위 검사 없음' · 변수2 라벨을 비우면 단일변수 식 · "
-                 "식은 X(첫 변수)·H(두 번째 변수)·^·ln·exp 를 사용합니다")
+            + tr("핵심 수종은 a·b·CF·범위·성장률을, 확장 수종(국내·국외)은 상대생장식·"
+                 "범위·변수를 채웁니다 · 해당 없는 열은 비어 있고 수정할 수 없습니다")
+            + "\n"
+            + tr("수종을 추가·삭제하면 세 대상지에 함께 적용됩니다 · 같은 수종의 "
+                 "대상지별 값은 각 탭에서 따로 수정합니다")
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(_note_css())
@@ -903,6 +1029,47 @@ class SpeciesEditor(QGroupBox):
         v.addLayout(status_row)
         self._set_dirty(False)
         self._sync_buttons()
+
+    def _build_env_tab(self, env: str) -> QWidget:
+        """대상지 1개 탭 — 상단 보정계수 + 하위 교목/관목 표."""
+        page = QWidget()
+        col = QVBoxLayout(page)
+        col.setContentsMargins(6, 6, 6, 6)
+        col.setSpacing(6)
+
+        factor_row = QHBoxLayout()
+        factor_row.setSpacing(8)
+        factor_row.addWidget(QLabel(tr("성장률 보정계수")))
+        for kind, section, label in (
+            (_KIND_TREE, _SECTION_TREE, tr("교목")),
+            (_KIND_SHRUB, _SECTION_SHRUB, tr("관목")),
+        ):
+            factor_row.addWidget(QLabel(label))
+            spin = QDoubleSpinBox()
+            spin.setDecimals(3)
+            spin.setSingleStep(0.05)
+            spin.setRange(0.001, 100.0)
+            spin.setValue(1.0)
+            spin.setMinimumWidth(_px(96))
+            spin.valueChanged.connect(lambda _v: self._on_factor_changed())
+            self.factor_spins[(env, section)] = spin
+            factor_row.addWidget(spin)
+        factor_row.addStretch(1)
+        col.addLayout(factor_row)
+
+        inner = QTabWidget()
+        for kind, title in ((_KIND_TREE, tr("교목")), (_KIND_SHRUB, tr("관목"))):
+            t = self._new_table()
+            self.env_tables[(env, kind)] = t
+            inner.addTab(t, title)
+        inner.currentChanged.connect(self._sync_buttons)
+        self._inner_tabs[env] = inner
+        col.addWidget(inner, 1)
+        return page
+
+    def _on_factor_changed(self) -> None:
+        if not self._loading:
+            self._set_dirty(True)
 
     def _sync_buttons(self, *_):
         loaded = self._data is not None
@@ -934,116 +1101,140 @@ class SpeciesEditor(QGroupBox):
         if not self._loading:
             self._set_dirty(True)
 
-    def _current_table(self) -> QTableWidget:
-        return self.tabs.currentWidget()
+    def _current_env(self) -> str:
+        idx = self.tabs.currentIndex()
+        if 0 <= idx < len(self._env_list):
+            return self._env_list[idx]
+        return self._env_list[0]
 
-    def _current_section(self) -> str:
-        t = self._current_table()
-        for k, w in self.tables.items():
-            if w is t:
-                return k
-        return _SECTION_TREE
+    def _current_kind(self) -> str:
+        inner = self._inner_tabs.get(self._current_env())
+        if inner is not None and inner.currentIndex() == 1:
+            return _KIND_SHRUB
+        return _KIND_TREE
+
+    def _current_table(self) -> QTableWidget:
+        return self.env_tables[(self._current_env(), self._current_kind())]
 
     # ── 불러오기 ──────────────────────────────────────────────────
     def load(self, data: dict):
-        """JSON dict 를 표에 채운다. 저장 상태로 초기화."""
+        """JSON dict 를 대상지별 표에 채운다. 저장 상태로 초기화."""
         self._loading = True
         try:
             self._data = data
             sci = data.get("SPECIES_EN") or {}
-            self._fill_coef_table(
-                self.tables[_SECTION_TREE], data.get(_SECTION_TREE) or {}, sci,
-                tree=True, display_scale=_display_scale(data, _SECTION_TREE),
-            )
-            self._fill_coef_table(
-                self.tables[_SECTION_SHRUB], data.get(_SECTION_SHRUB) or {}, sci,
-                tree=False, display_scale=_display_scale(data, _SECTION_SHRUB),
-            )
-            self._fill_eq_table(self.tables[_SECTION_DOM], data.get(_SECTION_DOM) or {}, sci)
-            self._fill_eq_table(self.tables[_SECTION_FOR], data.get(_SECTION_FOR) or {}, sci)
-            for t in self.tables.values():
-                _tidy_columns(t)
+            for env in self._env_list:
+                for section in (_SECTION_TREE, _SECTION_SHRUB):
+                    spin = self.factor_spins.get((env, section))
+                    if spin is not None:
+                        spin.setValue(_growth_factor_of(data, env, section))
+                for kind in (_KIND_TREE, _KIND_SHRUB):
+                    self._fill_env_table(env, kind, data, sci)
         finally:
             self._loading = False
         self._set_dirty(False)
         self._sync_buttons()
 
-    def _fill_coef_table(self, t: QTableWidget, section: dict, sci: dict, tree: bool,
-                         display_scale: float = 1.0):
+    def _fill_env_table(self, env: str, kind: str, data: dict, sci: dict) -> None:
+        t = self.env_tables[(env, kind)]
         t.setRowCount(0)
-        for name, entry in section.items():
-            if isinstance(entry, dict) and "default" in entry:
-                arr = entry["default"]
-            else:
-                arr = entry
-            display_arr = list(arr)
-            if len(display_arr) >= 5 and display_scale != 1.0:
-                display_arr[3] = float(display_arr[3]) / display_scale
-                display_arr[4] = float(display_arr[4]) / display_scale
-            self._append_coef_row(t, name, sci.get(_base_name(name), ""), display_arr, tree)
 
-    def _append_coef_row(self, t: QTableWidget, name: str, sci_name: str, arr: list,
-                         tree: bool):
+        core_section = _SECTION_TREE if kind == _KIND_TREE else _SECTION_SHRUB
+        scale = _display_scale(data, core_section)
+        for name, entry in (data.get(core_section) or {}).items():
+            arr = _coef_record(entry, env)
+            if arr is None:
+                continue
+            display = list(arr)
+            if len(display) >= 5 and scale != 1.0:
+                display[3] = float(display[3]) / scale
+                display[4] = float(display[4]) / scale
+            self._append_core_row(t, name, sci.get(_base_name(name), ""), display)
+
+        for section, origin in ((_SECTION_DOM, _ORIGIN_DOM), (_SECTION_FOR, _ORIGIN_FOR)):
+            for name, entry in (data.get(section) or {}).items():
+                rec = _eq_record(entry, env)
+                if rec is None:
+                    continue
+                if _classify_kind(name, rec.get("var1") or "DBH (cm)") != kind:
+                    continue
+                self._append_eq_row(t, name, sci.get(_base_name(name), ""), rec, origin)
+        _tidy_columns(t)
+
+    def _append_core_row(self, t: QTableWidget, name: str, sci_name: str,
+                         arr: list) -> None:
+        r = self._new_row(t, name, sci_name, _ROW_CORE, tr("핵심"))
+        for i, col in enumerate(_COL_CORE):
+            t.setItem(r, col, _mk_item(_fmt_num(arr[i] if i < len(arr) else None)))
+        for col in _COL_EQ_ONLY:
+            t.setItem(r, col, _mk_item("", editable=False))
+
+    def _append_eq_row(self, t: QTableWidget, name: str, sci_name: str, rec: dict,
+                       origin: str) -> None:
+        label = tr("국내") if origin == _ORIGIN_DOM else tr("국외")
+        r = self._new_row(t, name, sci_name, origin, label)
+        rng = rec.get("range") or [None, None]
+        v2 = rec.get("var2") or {}
+        values = {
+            _COL_DMIN: _fmt_num(rng[0]), _COL_DMAX: _fmt_num(rng[1]),
+            _COL_EQ: rec.get("equation") or "",
+            _COL_V1: rec.get("var1") or "DBH (cm)",
+            _COL_V2: v2.get("label") or "",
+            _COL_V2MIN: _fmt_num(v2.get("min")) if v2 else "",
+            _COL_V2MAX: _fmt_num(v2.get("max")) if v2 else "",
+            _COL_V2DEF: _fmt_num(v2.get("default")) if v2 else "",
+        }
+        for col, text in values.items():
+            t.setItem(r, col, _mk_item(text))
+        for col in _COL_CORE_ONLY:
+            t.setItem(r, col, _mk_item("", editable=False))
+
+    def _new_row(self, t: QTableWidget, name: str, sci_name: str, row_kind: str,
+                 origin_label: str) -> int:
         r = t.rowCount()
         t.insertRow(r)
-        # 영문 모드 + 학명이 있으면 0열은 학명을 보여주는 읽기전용 표시로 바뀐다.
-        # 저장 키(국문 수종명)는 화면에 보이지 않아도 _ROLE_TRUE_NAME 에 그대로 남는다.
         swap = (_LANG == "en" and bool(sci_name))
         name_it = _mk_item(sci_name if swap else name, editable=not swap)
         _set_true_name(name_it, name)
-        t.setItem(r, 0, name_it)
-        t.setItem(r, 1, _mk_item(sci_name))
-        for c in range(8):
-            t.setItem(r, c + 2, _mk_item(_fmt_num(arr[c] if c < len(arr) else None)))
-
-    def _fill_eq_table(self, t: QTableWidget, section: dict, sci: dict):
-        t.setRowCount(0)
-        for name, e in section.items():
-            rng = e.get("range") or [None, None]
-            v2 = e.get("var2") or {}
-            self._append_eq_row(t, [
-                name, sci.get(_base_name(name), ""), e.get("equation", ""),
-                _fmt_num(rng[0]), _fmt_num(rng[1]), e.get("var1", "DBH (cm)"),
-                v2.get("label", ""), _fmt_num(v2.get("min")) if v2 else "",
-                _fmt_num(v2.get("max")) if v2 else "", _fmt_num(v2.get("default")) if v2 else "",
-            ])
+        name_it.setData(_ROLE_ROW_KIND, row_kind)
+        t.setItem(r, _COL_NAME, name_it)
+        t.setItem(r, _COL_SCI, _mk_item(sci_name))
+        t.setItem(r, _COL_ORIGIN, _mk_item(origin_label, editable=False))
+        return r
 
     @staticmethod
-    def _append_eq_row(t: QTableWidget, values: list):
-        r = t.rowCount()
-        t.insertRow(r)
-        name = values[0] if values else ""
-        sci_name = values[1] if len(values) > 1 else ""
-        # 0열도 _append_coef_row 와 같은 규칙: 영문 모드 + 학명이 있으면 학명을
-        # 읽기전용으로 보여주고, 저장 키(국문)는 _ROLE_TRUE_NAME 에 보관한다.
-        swap = (_LANG == "en" and bool(sci_name))
-        for c, val in enumerate(values):
-            if c == 0:
-                it = _mk_item(sci_name if swap else name, editable=not swap)
-                _set_true_name(it, name)
-            else:
-                it = _mk_item(val)
-            t.setItem(r, c, it)
+    def _row_kind(t: QTableWidget, r: int) -> str:
+        item = t.item(r, _COL_NAME)
+        return (item.data(_ROLE_ROW_KIND) if item else None) or _ROW_CORE
 
-    # ── 추가/삭제/환경 ─────────────────────────────────────────────
+    # ── 추가 / 삭제 (세 대상지에 함께 적용) ───────────────────────
     def add_row(self):
-        section = self._current_section()
-        t = self._current_table()
+        kind = self._current_kind()
+        name = tr("새수종")
+        existing = {
+            _get_true_name(self.env_tables[(self._env_list[0], k)].item(r, _COL_NAME))
+            for k in (_KIND_TREE, _KIND_SHRUB)
+            for r in range(self.env_tables[(self._env_list[0], k)].rowCount())
+        }
+        candidate, n = name, 2
+        while candidate in existing:
+            candidate, n = "%s%d" % (name, n), n + 1
+
+        arr = ([0.1, 2.5, 0.5, 1, 30, 0.1, 0.1, 0.1] if kind == _KIND_TREE
+               else [0.0002, 2.5, 0.5, 0.5, 4.0, 0.2, 0.2, 0.2])
         self._loading = True
         try:
-            if section == _SECTION_TREE:
-                self._append_coef_row(t, tr("새수종"), "", [0.1, 2.5, 0.5, 1, 30, 0.1, 0.1, 0.1], True)
-            elif section == _SECTION_SHRUB:
-                self._append_coef_row(t, tr("새수종"), "", [0.0002, 2.5, 0.5, 0.5, 4.0, 0.2, 0.2, 0.2], False)
-            else:
-                self._append_eq_row(t, [tr("새수종") + "(전체)", "", "Y=0.1*X^2.5",
-                                        "", "", "DBH (cm)", "", "", "", ""])
+            for env in self._env_list:
+                self._append_core_row(self.env_tables[(env, kind)], candidate, "",
+                                      list(arr))
         finally:
             self._loading = False
+
+        t = self._current_table()
         r = t.rowCount() - 1
-        t.scrollToItem(t.item(r, 0))
-        t.setCurrentCell(r, 0)
-        t.editItem(t.item(r, 0))
+        t.scrollToItem(t.item(r, _COL_NAME))
+        t.setCurrentCell(r, _COL_NAME)
+        t.editItem(t.item(r, _COL_NAME))
         self._set_dirty(True)
 
     def delete_selected(self):
@@ -1052,14 +1243,22 @@ class SpeciesEditor(QGroupBox):
         if not rows:
             QMessageBox.information(self, tr("선택 삭제"), tr("삭제할 행을 먼저 선택하세요."))
             return
-        names = ", ".join(t.item(r, 0).text() for r in reversed(rows))
+        names = [_get_true_name(t.item(r, _COL_NAME)) for r in reversed(rows)]
         if QMessageBox.question(
                 self, tr("선택 삭제"),
-                tr("{n}개 수종을 삭제할까요?\n{names}").format(n=len(rows), names=names),
+                tr("{n}개 수종을 세 대상지에서 모두 삭제할까요?\n{names}")
+                .format(n=len(rows), names=", ".join(names)),
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
-        for r in rows:
-            t.removeRow(r)
+        targets = set(names)
+        self._loading = True
+        try:
+            for (_env, _kind), table in self.env_tables.items():
+                for r in range(table.rowCount() - 1, -1, -1):
+                    if _get_true_name(table.item(r, _COL_NAME)) in targets:
+                        table.removeRow(r)
+        finally:
+            self._loading = False
         self._set_dirty(True)
 
     # ── 검증 + JSON 조립 ──────────────────────────────────────────
@@ -1069,44 +1268,41 @@ class SpeciesEditor(QGroupBox):
             return [tr("먼저 species_data.json 을 선택하세요.")], None
         errors: list[str] = []
         sci_map: dict[str, str] = {}
-        out = dict(self._data)     # _schema · ENVIRONMENTS · ENVIRONMENTS_EN 등은 그대로
+        out = dict(self._data)
 
-        def _sci(name: str, text: str):
-            # 같은 기본 수종명이 여러 행에 걸쳐 있을 때(예: 단풍나무(전체)/단풍나무(경남)),
-            # 학명은 기본명당 하나만 저장되므로 맨 처음 값이 있는 행만 사용한다.
-            # 나머지 행은 비워둬도 되고, 값이 있어도 조용히 무시한다(불일치 에러 없음).
-            b = _base_name(name)
-            s = (text or "").strip()
-            if s and b not in sci_map:
-                sci_map[b] = s
+        sections: dict[str, dict] = {
+            _SECTION_TREE: {}, _SECTION_SHRUB: {},
+            _SECTION_DOM: {}, _SECTION_FOR: {},
+        }
 
-        out[_SECTION_TREE] = self._collect_coef(self.tables[_SECTION_TREE], True, errors, _sci)
-        out[_SECTION_SHRUB] = self._collect_coef(self.tables[_SECTION_SHRUB], False, errors, _sci)
-        out[_SECTION_DOM] = self._collect_eq(self.tables[_SECTION_DOM], tr("국내"), errors, _sci)
-        out[_SECTION_FOR] = self._collect_eq(self.tables[_SECTION_FOR], tr("국외"), errors, _sci)
-
+        for env in self._env_list:
+            for kind in (_KIND_TREE, _KIND_SHRUB):
+                self._collect_env_table(env, kind, sections, sci_map, errors)
         if errors:
             return errors, None
+
+        for section, table in sections.items():
+            out[section] = table
+        out["ENVIRONMENT_GROWTH_FACTORS"] = self._collect_factors()
+
         schema = dict(out.get("_schema") or {})
         schema["assessment_diameter_unit"] = "cm"
         schema["TREE_BASE_equation_diameter_unit"] = _section_equation_unit(
-            self._data, _SECTION_TREE
-        )
+            self._data, _SECTION_TREE)
         schema["SHRUB_SPECIES_equation_diameter_unit"] = _section_equation_unit(
-            self._data, _SECTION_SHRUB
-        )
+            self._data, _SECTION_SHRUB)
         schema["growth_diameter_unit"] = "cm/year"
         out["_schema"] = schema
-        # 학명 표: 표에 있는 기본명만 남기고, 표에서 준 값으로 갱신
+
         old_sci = dict(self._data.get("SPECIES_EN") or {})
-        live_bases = {_base_name(n) for sec in (_SECTION_TREE, _SECTION_SHRUB, _SECTION_DOM, _SECTION_FOR)
-                      for n in out[sec]}
-        new_sci = {b: v for b, v in old_sci.items() if b in live_bases}
+        live = {_base_name(n) for section in sections.values() for n in section}
+        new_sci = {b: v for b, v in old_sci.items() if b in live}
         new_sci.update(sci_map)
         out["SPECIES_EN"] = new_sci
-        # 키 순서를 원본과 같게
+
         ordered = {}
         for k in ("_schema", "ENVIRONMENTS", "ENVIRONMENTS_EN", "SPECIES_EN",
+                  "ENVIRONMENT_GROWTH_FACTORS", "SPECIES_GROWTH_FACTORS",
                   _SECTION_TREE, _SECTION_SHRUB, _SECTION_DOM, _SECTION_FOR):
             if k in out:
                 ordered[k] = out[k]
@@ -1114,101 +1310,136 @@ class SpeciesEditor(QGroupBox):
             ordered.setdefault(k, v)
         return [], ordered
 
-    def _collect_coef(self, t: QTableWidget, tree: bool, errors: list, sci_cb) -> dict:
-        label = tr("교목") if tree else tr("관목")
-        section = _SECTION_TREE if tree else _SECTION_SHRUB
-        columns = _TREE_COLS if tree else _SHRUB_COLS
-        storage_scale = _display_scale(self._data, section)
+    def _collect_factors(self) -> dict:
         result: dict = {}
-        for r in range(t.rowCount()):
-            name = _get_true_name(t.item(r, 0)).strip()
-            where = "%s #%d" % (label, r + 1)
-            if not name:
-                errors.append(tr("{where}: 수종명이 비어 있습니다").format(where=where)); continue
-            if name in result:
-                errors.append(tr("{where}: 수종명 '{name}' 이 중복됩니다").format(where=where, name=name)); continue
-            arr = []
-            ok = True
-            for c in range(8):
-                what = "%s '%s' / %s" % (label, name, tr(columns[c + 2][0]))
-                try:
-                    arr.append(_num_out(_parse_num(t.item(r, c + 2).text() if t.item(r, c + 2) else "", what)))
-                except ValueError as e:
-                    errors.append(str(e)); ok = False
-            if not ok:
-                continue
-            if arr[3] > arr[4]:
-                errors.append(tr("{label} '{name}': 최소직경({a})이 최대직경({b})보다 큽니다")
-                              .format(label=label, name=name, a=_fmt_num(arr[3]), b=_fmt_num(arr[4])))
-                continue
-            if arr[0] <= 0 or arr[1] <= 0:
-                errors.append(tr("{label} '{name}': 계수 a, b 는 0 보다 커야 합니다").format(label=label, name=name))
-                continue
-            sci_cb(name, t.item(r, 1).text() if t.item(r, 1) else "")
-            if storage_scale != 1.0:
-                arr[3] = _num_out(float(arr[3]) * storage_scale)
-                arr[4] = _num_out(float(arr[4]) * storage_scale)
-            if tree:
-                result[name] = {"default": arr}
-            else:
-                result[name] = arr
+        for env in self._env_list:
+            slot = {}
+            for section in (_SECTION_TREE, _SECTION_SHRUB):
+                spin = self.factor_spins.get((env, section))
+                slot[section] = _num_out(spin.value() if spin is not None else 1.0)
+            result[env] = slot
         return result
 
-    def _collect_eq(self, t: QTableWidget, label: str, errors: list, sci_cb) -> dict:
-        result: dict = {}
+    def _collect_env_table(self, env: str, kind: str, sections: dict,
+                           sci_map: dict, errors: list) -> None:
+        t = self.env_tables[(env, kind)]
+        core_section = _SECTION_TREE if kind == _KIND_TREE else _SECTION_SHRUB
+        storage_scale = _display_scale(self._data, core_section)
+        kind_label = tr("교목") if kind == _KIND_TREE else tr("관목")
+        seen: set[str] = set()
+
         for r in range(t.rowCount()):
-            g = lambda c: (t.item(r, c).text() if t.item(r, c) else "").strip()
-            name = _get_true_name(t.item(r, 0)).strip()
-            where = "%s #%d" % (label, r + 1)
+            name = _get_true_name(t.item(r, _COL_NAME)).strip()
+            where = "%s / %s #%d" % (env, kind_label, r + 1)
             if not name:
-                errors.append(tr("{where}: 수종명이 비어 있습니다").format(where=where)); continue
-            if name in result:
-                errors.append(tr("{where}: 수종명 '{name}' 이 중복됩니다").format(where=where, name=name)); continue
-            eq = g(2)
-            if not eq:
-                errors.append(tr("{label} '{name}': 상대생장식이 비어 있습니다").format(label=label, name=name)); continue
-            try:
-                rmin = _parse_num(g(3), "%s '%s' / %s" % (label, name, tr("범위 최소")), allow_blank=True)
-                rmax = _parse_num(g(4), "%s '%s' / %s" % (label, name, tr("범위 최대")), allow_blank=True)
-            except ValueError as e:
-                errors.append(str(e)); continue
-            if (rmin is None) != (rmax is None):
-                errors.append(tr("{label} '{name}': 범위는 최소·최대를 둘 다 적거나 둘 다 비워야 합니다")
-                              .format(label=label, name=name)); continue
-            if rmin is not None and rmin > rmax:
-                errors.append(tr("{label} '{name}': 범위 최소({a})가 최대({b})보다 큽니다")
-                              .format(label=label, name=name, a=_fmt_num(rmin), b=_fmt_num(rmax))); continue
-            var1 = g(5) or "DBH (cm)"
-            v2label = g(6)
-            entry: dict = {"equation": eq, "range": [_num_out(rmin), _num_out(rmax)], "var1": var1}
-            h_test = None
-            if v2label:
-                try:
-                    v2min = _parse_num(g(7), "%s '%s' / %s" % (label, name, tr("변수2 최소")))
-                    v2max = _parse_num(g(8), "%s '%s' / %s" % (label, name, tr("변수2 최대")))
-                    v2def = _parse_num(g(9), "%s '%s' / %s" % (label, name, tr("변수2 기본값")))
-                except ValueError as e:
-                    errors.append(str(e)); continue
-                if v2min > v2max:
-                    errors.append(tr("{label} '{name}': 변수2 최소가 최대보다 큽니다").format(label=label, name=name)); continue
-                entry["var2"] = {"label": v2label, "min": _num_out(v2min), "max": _num_out(v2max),
-                                 "default": _num_out(v2def)}
-                h_test = v2def
-            elif "H" in eq.replace("ln(", "").replace("exp(", ""):
-                errors.append(tr("{label} '{name}': 식에 H 가 있지만 변수2 라벨이 비어 있습니다")
-                              .format(label=label, name=name)); continue
-            # 식 평가 검사 (범위 안의 값 또는 10 으로)
-            x_test = rmin if (rmin is not None and rmin > 0) else 10.0
-            try:
-                y = _eval_equation(eq, x_test, h_test)
-                if not math.isfinite(y):
-                    raise ValueError(tr("결과가 유한하지 않습니다 (Y={y})").format(y=y))
-            except Exception as e:
-                errors.append(tr("{label} '{name}': 식 평가 실패 — {error}").format(label=label, name=name, error=e))
+                errors.append(tr("{where}: 수종명이 비어 있습니다").format(where=where))
                 continue
-            sci_cb(name, g(1))
-            result[name] = entry
-        return result
+            if name in seen:
+                errors.append(tr("{where}: 수종명 '{name}' 이 중복됩니다")
+                              .format(where=where, name=name))
+                continue
+            seen.add(name)
+
+            row_kind = self._row_kind(t, r)
+            sci_text = t.item(r, _COL_SCI).text() if t.item(r, _COL_SCI) else ""
+            base = _base_name(name)
+            if sci_text.strip() and base not in sci_map:
+                sci_map[base] = sci_text.strip()
+
+            if row_kind == _ROW_CORE:
+                record = self._read_core_row(t, r, name, where, storage_scale, errors)
+                if record is not None:
+                    slot = sections[core_section].setdefault(name, {"by_env": {}})
+                    slot["by_env"][env] = record
+            else:
+                section = _SECTION_DOM if row_kind == _ORIGIN_DOM else _SECTION_FOR
+                record = self._read_eq_row(t, r, name, where, errors)
+                if record is not None:
+                    slot = sections[section].setdefault(name, {"by_env": {}})
+                    slot["by_env"][env] = record
+
+    def _read_core_row(self, t: QTableWidget, r: int, name: str, where: str,
+                       storage_scale: float, errors: list):
+        values = []
+        for i, col in enumerate(_COL_CORE):
+            what = "%s '%s' / %s" % (where, name, tr(_MERGED_COLS[col][0]))
+            cell = t.item(r, col)
+            try:
+                values.append(_num_out(_parse_num(cell.text() if cell else "", what)))
+            except ValueError as exc:
+                errors.append(str(exc))
+                return None
+        if values[3] > values[4]:
+            errors.append(tr("{label} '{name}': 최소직경({a})이 최대직경({b})보다 큽니다")
+                          .format(label=where, name=name,
+                                  a=_fmt_num(values[3]), b=_fmt_num(values[4])))
+            return None
+        if values[0] <= 0 or values[1] <= 0:
+            errors.append(tr("{label} '{name}': 계수 a, b 는 0 보다 커야 합니다")
+                          .format(label=where, name=name))
+            return None
+        if storage_scale != 1.0:
+            values[3] = _num_out(float(values[3]) * storage_scale)
+            values[4] = _num_out(float(values[4]) * storage_scale)
+        return values
+
+    def _read_eq_row(self, t: QTableWidget, r: int, name: str, where: str,
+                     errors: list):
+        g = lambda c: (t.item(r, c).text() if t.item(r, c) else "").strip()
+        equation = g(_COL_EQ)
+        if not equation:
+            errors.append(tr("{where}: '{name}' 의 상대생장식이 비어 있습니다")
+                          .format(where=where, name=name))
+            return None
+
+        rmin_text, rmax_text = g(_COL_DMIN), g(_COL_DMAX)
+        rng = [None, None]
+        if rmin_text or rmax_text:
+            try:
+                rng = [_num_out(_parse_num(rmin_text, "%s / %s" % (where, tr("최소")))),
+                       _num_out(_parse_num(rmax_text, "%s / %s" % (where, tr("최대"))))]
+            except ValueError as exc:
+                errors.append(str(exc))
+                return None
+            if rng[0] > rng[1]:
+                errors.append(tr("{label} '{name}': 최소직경({a})이 최대직경({b})보다 큽니다")
+                              .format(label=where, name=name,
+                                      a=_fmt_num(rng[0]), b=_fmt_num(rng[1])))
+                return None
+
+        var2_label = g(_COL_V2)
+        var2 = None
+        if var2_label:
+            try:
+                var2 = {
+                    "label": var2_label,
+                    "min": _num_out(_parse_num(g(_COL_V2MIN) or "0",
+                                               "%s / %s" % (where, tr("변수2 최소")))),
+                    "max": _num_out(_parse_num(g(_COL_V2MAX) or "100",
+                                               "%s / %s" % (where, tr("변수2 최대")))),
+                    "default": _num_out(_parse_num(g(_COL_V2DEF) or "10",
+                                                   "%s / %s" % (where, tr("변수2 기본값")))),
+                }
+            except ValueError as exc:
+                errors.append(str(exc))
+                return None
+
+        sample_x = rng[0] if rng[0] else 10.0
+        if not sample_x or sample_x <= 0:
+            sample_x = 10.0
+        try:
+            _eval_equation(equation, float(sample_x),
+                           float(var2["default"]) if var2 else None)
+        except Exception as exc:  # noqa: BLE001 — 평가 실패 메시지를 그대로 보여준다
+            errors.append(tr("{where}: '{name}' 식 평가 실패 — {error}")
+                          .format(where=where, name=name, error=exc))
+            return None
+
+        record = {"equation": equation, "range": rng,
+                  "var1": g(_COL_V1) or "DBH (cm)"}
+        if var2 is not None:
+            record["var2"] = var2
+        return record
 
     def mark_saved(self, data: dict):
         """저장 완료 후 원본을 갱신하고 '변경 없음' 으로."""
@@ -1218,35 +1449,50 @@ class SpeciesEditor(QGroupBox):
     # ── 언어 전환 시 표 내용 보존 ─────────────────────────────────
     def snapshot(self) -> dict:
         rows = {}
-        for sec, t in self.tables.items():
-            sec_rows = []
+        for (env, kind), t in self.env_tables.items():
+            cells_all = []
             for r in range(t.rowCount()):
-                cells = [(t.item(r, c).text() if t.item(r, c) else "") for c in range(t.columnCount())]
-                if t.item(r, 0):
-                    cells[0] = _get_true_name(t.item(r, 0))   # 0열은 항상 저장 키(국문)로 스냅샷
-                sec_rows.append(cells)
-            rows[sec] = sec_rows
+                cells = [(t.item(r, c).text() if t.item(r, c) else "")
+                         for c in range(t.columnCount())]
+                cells[_COL_NAME] = _get_true_name(t.item(r, _COL_NAME))
+                cells_all.append([self._row_kind(t, r)] + cells)
+            rows["%s\x00%s" % (env, kind)] = cells_all
+        factors = {"%s\x00%s" % (env, sec): spin.value()
+                   for (env, sec), spin in self.factor_spins.items()}
         return {"data": self._data, "dirty": self._dirty, "rows": rows,
-                "tab": self.tabs.currentIndex()}
+                "factors": factors, "tab": self.tabs.currentIndex()}
 
     def restore(self, snap: dict):
         self._loading = True
         try:
             self._data = snap.get("data")
-            for sec, t in self.tables.items():
+            for (env, sec), spin in self.factor_spins.items():
+                value = (snap.get("factors") or {}).get("%s\x00%s" % (env, sec))
+                if value:
+                    spin.setValue(float(value))
+            for (env, kind), t in self.env_tables.items():
                 t.setRowCount(0)
-                for cells in snap["rows"].get(sec, []):
+                for packed in (snap.get("rows") or {}).get("%s\x00%s" % (env, kind), []):
+                    row_kind, cells = packed[0], packed[1:]
                     r = t.rowCount()
                     t.insertRow(r)
-                    true_name = cells[0] if cells else ""
-                    sci_name = cells[1] if len(cells) > 1 else ""
+                    true_name = cells[_COL_NAME] if cells else ""
+                    sci_name = cells[_COL_SCI] if len(cells) > _COL_SCI else ""
                     swap = (_LANG == "en" and bool(sci_name))
+                    editable_cols = (_COL_CORE if row_kind == _ROW_CORE
+                                     else _COL_EQ_FIELDS)
                     for c, text in enumerate(cells):
-                        if c == 0:
-                            it = _mk_item(sci_name if swap else true_name, editable=not swap)
+                        if c == _COL_NAME:
+                            it = _mk_item(sci_name if swap else true_name,
+                                          editable=not swap)
                             _set_true_name(it, true_name)
-                        else:
+                            it.setData(_ROLE_ROW_KIND, row_kind)
+                        elif c == _COL_SCI:
                             it = _mk_item(text)
+                        elif c == _COL_ORIGIN:
+                            it = _mk_item(text, editable=False)
+                        else:
+                            it = _mk_item(text, editable=c in editable_cols)
                         t.setItem(r, c, it)
                 _tidy_columns(t)
             self.tabs.setCurrentIndex(snap.get("tab", 0))
